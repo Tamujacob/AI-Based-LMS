@@ -240,13 +240,5 @@ class DashboardScreen(ctk.CTkFrame):
 
     def _refresh_card(self, card, new_value: str):
         """Update the value label inside a StatCard."""
-        for widget in card.winfo_children():
-            if isinstance(widget, ctk.CTkFrame):
-                for child in widget.winfo_children():
-                    info = child.cget("font") if hasattr(child, "cget") else None
-                    if isinstance(child, ctk.CTkLabel):
-                        try:
-                            if child.cget("font") == FONTS["title"]:
-                                child.configure(text=new_value)
-                        except Exception:
-                            pass
+        if hasattr(card, 'value_label'):
+            card.value_label.configure(text=new_value)
