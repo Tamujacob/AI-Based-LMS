@@ -6,7 +6,7 @@ and holds the currently logged-in user session.
 """
 
 import customtkinter as ctk
-from app.ui.styles.theme import configure_theme, COLORS, FONTS
+from app.ui.styles.theme import configure_theme, COLORS
 from app.config.settings import APP_NAME, WINDOW_WIDTH, WINDOW_HEIGHT, WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT
 
 
@@ -27,11 +27,10 @@ class AppRoot(ctk.CTk):
         self._center_window()
 
         # ── Session State ──────────────────────────────────────────────────
-        self.current_user = None   # Set after successful login
+        self.current_user = None
         self.current_screen = None
 
         # ── Screen Registry ────────────────────────────────────────────────
-        # Screens are imported lazily to avoid circular imports
         self._screens = {}
 
         # ── Start with Login ───────────────────────────────────────────────
@@ -47,15 +46,20 @@ class AppRoot(ctk.CTk):
 
     def show_screen(self, screen_name: str, **kwargs):
         """Switch to the named screen, destroying the current one."""
-        # Destroy current screen if any
+        # Destroy current screen
         if self.current_screen is not None:
             self.current_screen.destroy()
             self.current_screen = None
 
-        # Lazy-import and instantiate the screen
+        # Build new screen
         screen_class = self._get_screen_class(screen_name)
         self.current_screen = screen_class(self, **kwargs)
         self.current_screen.pack(fill="both", expand=True)
+
+        # Force Linux to redraw the window
+        self.update()
+        self.update_idletasks()
+        self.after(50, self.update)
 
     def _get_screen_class(self, name: str):
         if name not in self._screens:
@@ -98,4 +102,5 @@ class AppRoot(ctk.CTk):
     def logout(self):
         """Clear session and return to login screen."""
         self.current_user = None
+        self._screens = {}  # Clear screen cache on logout
         self.show_screen("login")
