@@ -1,0 +1,32 @@
+# Environment variables — NEVER push this
+.env
+
+# Virtual environment — too large for GitHub
+venv/
+env/
+
+# Python cache files — auto-generated, not needed
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Database files
+*.db
+*.sqlite3
+
+# Collateral uploads (user data)
+data/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/settings.json
+.idea/
+
+# Test/build output
+*.egg-info/
+dist/
+build/
