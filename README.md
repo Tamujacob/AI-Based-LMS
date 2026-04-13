@@ -277,7 +277,7 @@ The institution previously relied on a fully manual, paper-based system. This pr
 
 ## Author
 
-**Tamukedde Jacob** | 24/BIT/BU/R/0010  
+**Tamukedde Jacob** 
 Bachelor of Information Technology — Final Year Project  
 Bugema University, Kampala, Uganda
 
