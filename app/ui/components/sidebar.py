@@ -19,9 +19,6 @@ NAV_ITEMS = [
     ("settings",    "S",  "Settings"),
 ]
 
-NAV_ICONS = {
-    "dashboard":   "\u{1F4CA}" if False else "Dashboard",
-}
 
 # Unicode icons that work reliably
 ICONS = {

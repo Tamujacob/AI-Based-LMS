@@ -1,8 +1,5 @@
 """
 app/ui/app_root.py
-─────────────────────────────────────────────
-Root Tkinter window. Manages screen switching
-and holds the currently logged-in user session.
 """
 
 import customtkinter as ctk
@@ -11,55 +8,60 @@ from app.config.settings import APP_NAME, WINDOW_WIDTH, WINDOW_HEIGHT, WINDOW_MI
 
 
 class AppRoot(ctk.CTk):
-    """Main application window with screen management."""
 
     def __init__(self):
         configure_theme()
         super().__init__()
 
-        # ── Window Setup ───────────────────────────────────────────────────
         self.title(APP_NAME)
         self.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}")
         self.minsize(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)
         self.configure(fg_color=COLORS["bg_primary"])
-
-        # Center window on screen
         self._center_window()
 
-        # ── Session State ──────────────────────────────────────────────────
         self.current_user = None
         self.current_screen = None
-
-        # ── Screen Registry ────────────────────────────────────────────────
         self._screens = {}
+        self._transition_pending = False
 
-        # ── Start with Login ───────────────────────────────────────────────
         self.show_screen("login")
 
     def _center_window(self):
         self.update_idletasks()
-        screen_w = self.winfo_screenwidth()
-        screen_h = self.winfo_screenheight()
-        x = (screen_w - WINDOW_WIDTH) // 2
-        y = (screen_h - WINDOW_HEIGHT) // 2
+        sw = self.winfo_screenwidth()
+        sh = self.winfo_screenheight()
+        x = (sw - WINDOW_WIDTH) // 2
+        y = (sh - WINDOW_HEIGHT) // 2
         self.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}+{x}+{y}")
 
     def show_screen(self, screen_name: str, **kwargs):
-        """Switch to the named screen, destroying the current one."""
-        # Destroy current screen
-        if self.current_screen is not None:
-            self.current_screen.destroy()
-            self.current_screen = None
+        if self._transition_pending:
+            return
+        self._transition_pending = True
 
-        # Build new screen
-        screen_class = self._get_screen_class(screen_name)
-        self.current_screen = screen_class(self, **kwargs)
-        self.current_screen.pack(fill="both", expand=True)
+        def _do_switch():
+            if self.current_screen is not None:
+                try:
+                    self.current_screen.destroy()
+                except Exception:
+                    pass
+                self.current_screen = None
 
-        # Force Linux to redraw the window
-        self.update()
-        self.update_idletasks()
-        self.after(50, self.update)
+            try:
+                screen_class = self._get_screen_class(screen_name)
+                self.current_screen = screen_class(self, **kwargs)
+                self.current_screen.pack(fill="both", expand=True)
+                self.update()
+                self.update_idletasks()
+            except Exception as e:
+                print(f"[AppRoot] Error loading screen '{screen_name}': {e}")
+                import traceback
+                traceback.print_exc()
+            finally:
+                self._transition_pending = False
+                self.after(50, self.update)
+
+        self.after(0, _do_switch)
 
     def _get_screen_class(self, name: str):
         if name not in self._screens:
@@ -95,12 +97,11 @@ class AppRoot(ctk.CTk):
         return self._screens[name]
 
     def login(self, user):
-        """Called by LoginScreen after successful authentication."""
         self.current_user = user
+        self._screens = {}
         self.show_screen("dashboard")
 
     def logout(self):
-        """Clear session and return to login screen."""
         self.current_user = None
-        self._screens = {}  # Clear screen cache on logout
+        self._screens = {}
         self.show_screen("login")
