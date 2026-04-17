@@ -1,194 +1,223 @@
 """
 app/ui/screens/login_screen.py
-─────────────────────────────────────────────
-Authentication screen. Deep navy + gold branding.
-Clean, professional financial institution aesthetic.
+Bingongold Credit branded login — green sidebar, white form panel, logo displayed
 """
 
 import customtkinter as ctk
+import os
+from PIL import Image
 from app.ui.styles.theme import COLORS, FONTS, primary_button_style, input_style
 
 
-class LoginScreen(ctk.CTkFrame):
-    """Login screen shown at app launch."""
+def _load_logo(width=220):
+    """Try to load the company logo, return CTkImage or None."""
+    search_paths = [
+        "assets/images/logo.png",
+        "./assets/images/logo.png",
+        os.path.expanduser("~/Desktop/AI-Based-LMS/assets/images/logo.png"),
+    ]
+    for path in search_paths:
+        if os.path.exists(path):
+            try:
+                img = Image.open(path)
+                ratio = width / img.width
+                new_h = int(img.height * ratio)
+                img = img.resize((width, new_h), Image.LANCZOS)
+                return ctk.CTkImage(light_image=img, dark_image=img,
+                                    size=(width, new_h)), new_h
+            except Exception:
+                pass
+    return None, 0
 
+
+class LoginScreen(ctk.CTkFrame):
     def __init__(self, master, **kwargs):
         super().__init__(master, fg_color=COLORS["bg_primary"], **kwargs)
         self._build_ui()
 
     def _build_ui(self):
-        # ── Two-column layout ──────────────────────────────────────────────
-        self.columnconfigure(0, weight=1)  # Left brand panel
-        self.columnconfigure(1, weight=1)  # Right login form
+        self.columnconfigure(0, weight=1)  # Left green brand panel
+        self.columnconfigure(1, weight=1)  # Right white form
         self.rowconfigure(0, weight=1)
-
         self._build_brand_panel()
         self._build_form_panel()
 
-    # ── Left Brand Panel ───────────────────────────────────────────────────
+    # ── Left Green Brand Panel ─────────────────────────────────────────
     def _build_brand_panel(self):
-        brand = ctk.CTkFrame(self, fg_color=COLORS["bg_secondary"], corner_radius=0)
+        brand = ctk.CTkFrame(self, fg_color=COLORS["accent_green"],
+                              corner_radius=0)
         brand.grid(row=0, column=0, sticky="nsew")
         brand.columnconfigure(0, weight=1)
         brand.rowconfigure(0, weight=1)
 
         inner = ctk.CTkFrame(brand, fg_color="transparent")
-        inner.grid(row=0, column=0, padx=60, pady=60, sticky="nsew")
+        inner.grid(row=0, column=0, padx=50, pady=60, sticky="nsew")
         inner.columnconfigure(0, weight=1)
 
-        # Gold accent bar
-        bar = ctk.CTkFrame(inner, fg_color=COLORS["accent_gold"], height=4, corner_radius=2)
-        bar.grid(row=0, column=0, sticky="ew", pady=(0, 30))
-
-        # Institution name
-        ctk.CTkLabel(
-            inner,
-            text="BINGONGOLD",
-            font=("Georgia", 36, "bold"),
-            text_color=COLORS["accent_gold"],
-        ).grid(row=1, column=0, sticky="w")
-
-        ctk.CTkLabel(
-            inner,
-            text="CREDIT",
-            font=("Georgia", 36),
-            text_color=COLORS["text_primary"],
-        ).grid(row=2, column=0, sticky="w")
-
-        ctk.CTkLabel(
-            inner,
-            text="Loans Management System",
-            font=FONTS["subheading"],
-            text_color=COLORS["text_secondary"],
-        ).grid(row=3, column=0, sticky="w", pady=(4, 40))
-
-        # Decorative divider
-        div = ctk.CTkFrame(inner, fg_color=COLORS["border"], height=1)
-        div.grid(row=4, column=0, sticky="ew", pady=(0, 30))
-
-        # Feature bullets
-        features = [
-            "✦  Automated Interest Calculations",
-            "✦  AI-Powered Risk Assessment",
-            "✦  Natural Language Chatbot",
-            "✦  Real-Time Repayment Tracking",
-            "✦  Secure Role-Based Access",
-        ]
-        for i, feat in enumerate(features):
+        # Logo image
+        logo_img, logo_h = _load_logo(width=240)
+        if logo_img:
+            ctk.CTkLabel(inner, image=logo_img, text="",
+                         fg_color="transparent").grid(
+                row=0, column=0, pady=(0, 24))
+        else:
+            # Text fallback
             ctk.CTkLabel(
                 inner,
-                text=feat,
-                font=FONTS["body"],
-                text_color=COLORS["text_secondary"],
-                anchor="w",
-            ).grid(row=5 + i, column=0, sticky="w", pady=4)
+                text="Bingongold Credit",
+                font=("Georgia", 30, "bold"),
+                text_color=COLORS["accent_gold"],
+            ).grid(row=0, column=0, pady=(0, 4))
+            ctk.CTkLabel(
+                inner,
+                text="together as one",
+                font=("Georgia", 14, "italic"),
+                text_color="#CCFFCC",
+            ).grid(row=1, column=0, pady=(0, 30))
 
-        # Version tag at bottom
+        # Gold divider
+        ctk.CTkFrame(inner, fg_color=COLORS["accent_gold"],
+                     height=3, corner_radius=2).grid(
+            row=2, column=0, sticky="ew", pady=(0, 28))
+
+        # Features list
+        features = [
+            "Automated Loan Processing",
+            "AI-Powered Risk Assessment",
+            "Natural Language Chatbot",
+            "Real-Time Repayment Tracking",
+            "Secure Role-Based Access",
+        ]
+        for i, feat in enumerate(features):
+            row_f = ctk.CTkFrame(inner, fg_color="transparent")
+            row_f.grid(row=3+i, column=0, sticky="w", pady=5)
+
+            # Gold bullet dot
+            ctk.CTkLabel(row_f, text="●", font=("Helvetica", 10),
+                         text_color=COLORS["accent_gold"],
+                         width=20).pack(side="left")
+            ctk.CTkLabel(row_f, text=feat, font=FONTS["body"],
+                         text_color="#DDFFDD").pack(side="left", padx=(4, 0))
+
+        # Address at bottom
         ctk.CTkLabel(
             brand,
-            text="Ham Tower · Wandegeya · Kampala",
+            text="Ham Tower · Wandegeya · Kampala, Uganda",
             font=FONTS["caption"],
-            text_color=COLORS["text_muted"],
-        ).grid(row=1, column=0, pady=(0, 20))
+            text_color="#AADDAA",
+        ).grid(row=1, column=0, pady=(0, 16))
 
-    # ── Right Form Panel ───────────────────────────────────────────────────
+    # ── Right White Form Panel ─────────────────────────────────────────
     def _build_form_panel(self):
-        form_bg = ctk.CTkFrame(self, fg_color=COLORS["bg_primary"], corner_radius=0)
+        form_bg = ctk.CTkFrame(self, fg_color="#FFFFFF", corner_radius=0)
         form_bg.grid(row=0, column=1, sticky="nsew")
         form_bg.columnconfigure(0, weight=1)
         form_bg.rowconfigure(0, weight=1)
 
-        card = ctk.CTkFrame(form_bg, fg_color=COLORS["bg_card"], corner_radius=16, width=400)
-        card.grid(row=0, column=0, padx=80, pady=80, sticky="")
+        card = ctk.CTkFrame(form_bg, fg_color="#FFFFFF",
+                             corner_radius=16,
+                             border_width=1,
+                             border_color=COLORS["border"],
+                             width=380)
+        card.grid(row=0, column=0, padx=70, pady=80, sticky="")
         card.columnconfigure(0, weight=1)
 
-        # Header
+        # Small logo above form
+        logo_img, _ = _load_logo(width=160)
+        if logo_img:
+            ctk.CTkLabel(card, image=logo_img, text="",
+                         fg_color="transparent").grid(
+                row=0, column=0, pady=(28, 8))
+        else:
+            ctk.CTkLabel(card, text="🌿", font=("Helvetica", 40),
+                         fg_color="transparent").grid(
+                row=0, column=0, pady=(28, 8))
+
+        # Green top accent bar
+        ctk.CTkFrame(card, fg_color=COLORS["accent_green"],
+                     height=4, corner_radius=2).grid(
+            row=1, column=0, sticky="ew", padx=32, pady=(0, 20))
+
+        # Welcome text
         ctk.CTkLabel(
-            card,
-            text="Welcome Back",
+            card, text="Welcome Back",
             font=FONTS["title"],
-            text_color=COLORS["text_primary"],
-        ).grid(row=0, column=0, padx=40, pady=(40, 4), sticky="w")
+            text_color=COLORS["accent_green_dark"],
+        ).grid(row=2, column=0, padx=32, pady=(0, 4), sticky="w")
 
         ctk.CTkLabel(
-            card,
-            text="Sign in to your account",
+            card, text="Sign in to Bingongold Credit LMS",
             font=FONTS["body"],
             text_color=COLORS["text_secondary"],
-        ).grid(row=1, column=0, padx=40, pady=(0, 30), sticky="w")
+        ).grid(row=3, column=0, padx=32, pady=(0, 24), sticky="w")
 
         # Username
-        ctk.CTkLabel(
-            card, text="Username",
-            font=FONTS["subheading"],
-            text_color=COLORS["text_secondary"],
-            anchor="w",
-        ).grid(row=2, column=0, padx=40, pady=(0, 6), sticky="w")
-
+        ctk.CTkLabel(card, text="Username",
+                     font=FONTS["subheading"],
+                     text_color=COLORS["text_secondary"],
+                     anchor="w").grid(row=4, column=0, padx=32,
+                                      pady=(0, 6), sticky="w")
         self.username_var = ctk.StringVar()
         self.username_entry = ctk.CTkEntry(
-            card,
-            textvariable=self.username_var,
+            card, textvariable=self.username_var,
             placeholder_text="Enter your username",
-            **input_style(),
-        )
-        self.username_entry.grid(row=3, column=0, padx=40, pady=(0, 20), sticky="ew")
+            **input_style())
+        self.username_entry.grid(row=5, column=0, padx=32, pady=(0, 16),
+                                  sticky="ew")
 
         # Password
-        ctk.CTkLabel(
-            card, text="Password",
-            font=FONTS["subheading"],
-            text_color=COLORS["text_secondary"],
-            anchor="w",
-        ).grid(row=4, column=0, padx=40, pady=(0, 6), sticky="w")
-
+        ctk.CTkLabel(card, text="Password",
+                     font=FONTS["subheading"],
+                     text_color=COLORS["text_secondary"],
+                     anchor="w").grid(row=6, column=0, padx=32,
+                                      pady=(0, 6), sticky="w")
         self.password_var = ctk.StringVar()
         self.password_entry = ctk.CTkEntry(
-            card,
-            textvariable=self.password_var,
+            card, textvariable=self.password_var,
             placeholder_text="Enter your password",
-            show="•",
-            **input_style(),
-        )
-        self.password_entry.grid(row=5, column=0, padx=40, pady=(0, 10), sticky="ew")
+            show="●", **input_style())
+        self.password_entry.grid(row=7, column=0, padx=32, pady=(0, 10),
+                                  sticky="ew")
 
-        # Error label (hidden by default)
-        self.error_label = ctk.CTkLabel(
-            card,
-            text="",
-            font=FONTS["body_small"],
-            text_color=COLORS["danger"],
-            anchor="w",
-        )
-        self.error_label.grid(row=6, column=0, padx=40, sticky="w")
+        # Error label
+        self.error_label = ctk.CTkLabel(card, text="",
+                                         font=FONTS["body_small"],
+                                         text_color=COLORS["danger"],
+                                         anchor="w")
+        self.error_label.grid(row=8, column=0, padx=32, sticky="w")
 
-        # Login button
+        # Login button — green
         self.login_btn = ctk.CTkButton(
-            card,
-            text="Sign In",
+            card, text="Sign In",
             command=self._handle_login,
-            **primary_button_style(),
-        )
-        self.login_btn.grid(row=7, column=0, padx=40, pady=(20, 40), sticky="ew")
+            **primary_button_style())
+        self.login_btn.grid(row=9, column=0, padx=32, pady=(16, 28),
+                             sticky="ew")
 
-        # Bind Enter key
-        self.username_entry.bind("<Return>", lambda e: self.password_entry.focus())
-        self.password_entry.bind("<Return>", lambda e: self._handle_login())
+        # Tagline
+        ctk.CTkLabel(
+            card,
+            text='"together as one"',
+            font=FONTS["tagline"],
+            text_color=COLORS["accent_green"],
+        ).grid(row=10, column=0, pady=(0, 28))
+
+        self.username_entry.bind("<Return>",
+                                  lambda e: self.password_entry.focus())
+        self.password_entry.bind("<Return>",
+                                  lambda e: self._handle_login())
         self.username_entry.focus()
 
-    # ── Login Logic ────────────────────────────────────────────────────────
     def _handle_login(self):
         username = self.username_var.get().strip()
         password = self.password_var.get()
-
         if not username or not password:
             self._show_error("Please enter both username and password.")
             return
-
         self.login_btn.configure(state="disabled", text="Signing in...")
         self.after(100, lambda: self._authenticate(username, password))
 
-    def _authenticate(self, username: str, password: str):
+    def _authenticate(self, username, password):
         try:
             from app.core.services.auth_service import AuthService
             user = AuthService.authenticate(username, password)
@@ -201,5 +230,5 @@ class LoginScreen(ctk.CTkFrame):
             self._show_error(f"Connection error: {e}")
             self.login_btn.configure(state="normal", text="Sign In")
 
-    def _show_error(self, message: str):
+    def _show_error(self, message):
         self.error_label.configure(text=message)
