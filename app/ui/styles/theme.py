@@ -1,60 +1,66 @@
 """
 app/ui/styles/theme.py
-─────────────────────────────────────────────
-Centralised design system for Bingongold LMS.
-Deep navy + gold — professional financial aesthetic.
-All colors, fonts, and widget configs live here.
+Bingongold Credit brand theme — Green, Gold, White
 """
 
 import customtkinter as ctk
 
-# ── Color Palette ─────────────────────────────────────────────────────────────
-# Dark theme (default)
 COLORS = {
     # Backgrounds
-    "bg_primary":       "#0D1B2A",   # Deep navy — main background
-    "bg_secondary":     "#112235",   # Slightly lighter — sidebar
-    "bg_card":          "#152C40",   # Card / panel backgrounds
-    "bg_input":         "#1A3550",   # Input field background
-    "bg_hover":         "#1F3D5C",   # Hover state
-    "bg_selected":      "#1B4F72",   # Selected row
+    "bg_primary":       "#F4F6F4",   # Light grey-green — main background
+    "bg_secondary":     "#1A5C1E",   # Dark green — sidebar
+    "bg_card":          "#FFFFFF",   # White cards
+    "bg_input":         "#F0F7F0",   # Very light green input
+    "bg_hover":         "#2E8B32",   # Mid green hover
+    "bg_selected":      "#34A038",   # Selected row
 
-    # Gold accent (brand color — Bingongold)
-    "accent_gold":      "#D4A017",   # Primary gold
-    "accent_gold_dark": "#B8860B",   # Darker gold (pressed states)
-    "accent_gold_light":"#F0C040",   # Light gold (hover)
+    # Brand colors
+    "accent_gold":      "#D4A820",   # Primary gold (from logo)
+    "accent_gold_dark": "#B8900A",   # Darker gold
+    "accent_gold_light":"#F0C840",   # Light gold hover
+    "accent_green":     "#34A038",   # Primary brand green
+    "accent_green_dark":"#1A5C1E",   # Dark green
+    "accent_green_light":"#4DC452",  # Light green
 
     # Semantic
-    "success":          "#27AE60",
-    "warning":          "#F39C12",
-    "danger":           "#E74C3C",
-    "info":             "#2E86C1",
+    "success":          "#34A038",
+    "warning":          "#D4A820",
+    "danger":           "#C0392B",
+    "info":             "#1A6B8A",
 
     # Risk colors
-    "risk_low":         "#27AE60",
-    "risk_medium":      "#F39C12",
-    "risk_high":        "#E74C3C",
+    "risk_low":         "#34A038",
+    "risk_medium":      "#D4A820",
+    "risk_high":        "#C0392B",
 
     # Text
-    "text_primary":     "#ECF0F1",   # Almost white
-    "text_secondary":   "#95A5A6",   # Muted grey
-    "text_muted":       "#6C7A89",   # Dimmed
-    "text_on_accent":   "#0D1B2A",   # Dark text on gold buttons
+    "text_primary":     "#1A2E1A",   # Very dark green-black
+    "text_secondary":   "#4A6B4A",   # Medium green-grey
+    "text_muted":       "#7A9A7A",   # Muted green
+    "text_on_green":    "#FFFFFF",   # White on green backgrounds
+    "text_on_gold":     "#1A2E1A",   # Dark on gold
+    "text_on_accent":   "#FFFFFF",   # White on green buttons
 
     # Borders
-    "border":           "#1E3A52",
-    "border_focus":     "#D4A017",
+    "border":           "#C8DFC8",
+    "border_focus":     "#34A038",
 
     # Status badge backgrounds
-    "status_pending_bg":   "#2C3E50",
-    "status_approved_bg":  "#1A5276",
-    "status_active_bg":    "#1E8449",
-    "status_completed_bg": "#17202A",
-    "status_defaulted_bg": "#922B21",
-    "status_rejected_bg":  "#6E2C00",
+    "status_pending_bg":   "#FFF8E8",
+    "status_approved_bg":  "#E8F4E8",
+    "status_active_bg":    "#34A038",
+    "status_completed_bg": "#F0F0F0",
+    "status_defaulted_bg": "#FDECEA",
+    "status_rejected_bg":  "#FFF0F0",
+
+    # Sidebar specific
+    "sidebar_bg":       "#1A5C1E",
+    "sidebar_text":     "#FFFFFF",
+    "sidebar_muted":    "#A8D0A8",
+    "sidebar_active":   "#D4A820",
+    "sidebar_hover":    "#2E8B32",
 }
 
-# ── Typography ────────────────────────────────────────────────────────────────
 FONTS = {
     "display":      ("Georgia", 28, "bold"),
     "title":        ("Georgia", 20, "bold"),
@@ -68,30 +74,37 @@ FONTS = {
     "button":       ("Helvetica", 12, "bold"),
     "nav":          ("Helvetica", 13),
     "badge":        ("Helvetica", 10, "bold"),
+    "tagline":      ("Georgia", 11, "italic"),
 }
 
-# ── Dimensions ────────────────────────────────────────────────────────────────
-SIDEBAR_WIDTH = 220
+SIDEBAR_WIDTH = 230
 HEADER_HEIGHT = 60
-CARD_CORNER_RADIUS = 12
+CARD_CORNER_RADIUS = 10
 BUTTON_CORNER_RADIUS = 8
 INPUT_CORNER_RADIUS = 8
 
-# ── CustomTkinter Configuration ───────────────────────────────────────────────
+
 def configure_theme():
-    """Apply the Bingongold theme to CustomTkinter."""
-    ctk.set_appearance_mode("dark")
-    ctk.set_default_color_theme("dark-blue")
+    ctk.set_appearance_mode("light")
+    ctk.set_default_color_theme("green")
 
-
-# ── Widget Style Presets ──────────────────────────────────────────────────────
 
 def primary_button_style() -> dict:
-    """Gold primary action button."""
+    return {
+        "fg_color": COLORS["accent_green"],
+        "hover_color": COLORS["accent_green_dark"],
+        "text_color": COLORS["text_on_green"],
+        "font": FONTS["button"],
+        "corner_radius": BUTTON_CORNER_RADIUS,
+        "height": 40,
+    }
+
+
+def gold_button_style() -> dict:
     return {
         "fg_color": COLORS["accent_gold"],
-        "hover_color": COLORS["accent_gold_light"],
-        "text_color": COLORS["text_on_accent"],
+        "hover_color": COLORS["accent_gold_dark"],
+        "text_color": COLORS["text_on_gold"],
         "font": FONTS["button"],
         "corner_radius": BUTTON_CORNER_RADIUS,
         "height": 40,
@@ -99,13 +112,12 @@ def primary_button_style() -> dict:
 
 
 def secondary_button_style() -> dict:
-    """Outlined secondary button."""
     return {
         "fg_color": "transparent",
-        "border_color": COLORS["accent_gold"],
+        "border_color": COLORS["accent_green"],
         "border_width": 1,
-        "hover_color": COLORS["bg_hover"],
-        "text_color": COLORS["accent_gold"],
+        "hover_color": COLORS["bg_input"],
+        "text_color": COLORS["accent_green"],
         "font": FONTS["button"],
         "corner_radius": BUTTON_CORNER_RADIUS,
         "height": 40,
@@ -113,11 +125,10 @@ def secondary_button_style() -> dict:
 
 
 def danger_button_style() -> dict:
-    """Red destructive action button."""
     return {
         "fg_color": COLORS["danger"],
-        "hover_color": "#C0392B",
-        "text_color": COLORS["text_primary"],
+        "hover_color": "#A93226",
+        "text_color": "#FFFFFF",
         "font": FONTS["button"],
         "corner_radius": BUTTON_CORNER_RADIUS,
         "height": 40,
@@ -125,7 +136,6 @@ def danger_button_style() -> dict:
 
 
 def input_style() -> dict:
-    """Standard text input field."""
     return {
         "fg_color": COLORS["bg_input"],
         "border_color": COLORS["border"],
@@ -138,7 +148,6 @@ def input_style() -> dict:
 
 
 def card_style() -> dict:
-    """Standard card / panel."""
     return {
         "fg_color": COLORS["bg_card"],
         "corner_radius": CARD_CORNER_RADIUS,
@@ -146,7 +155,6 @@ def card_style() -> dict:
 
 
 def status_color(status: str) -> str:
-    """Return the background color for a given loan status."""
     mapping = {
         "pending":   COLORS["status_pending_bg"],
         "approved":  COLORS["status_approved_bg"],
@@ -159,7 +167,6 @@ def status_color(status: str) -> str:
 
 
 def risk_color(risk: str) -> str:
-    """Return the color for a risk level."""
     mapping = {
         "LOW":    COLORS["risk_low"],
         "MEDIUM": COLORS["risk_medium"],
