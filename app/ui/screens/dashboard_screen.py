@@ -1,3 +1,7 @@
+"""
+app/ui/screens/dashboard_screen.py — Fixed layout, no line through title
+"""
+
 import customtkinter as ctk
 from app.ui.styles.theme import COLORS, FONTS
 from app.ui.components.sidebar import Sidebar
