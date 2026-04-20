@@ -19,7 +19,9 @@ NAV_ITEMS = [
     ("settings",    "S",  "Settings"),
 ]
 
-
+NAV_ICONS = {
+    "dashboard": "📊",
+}
 # Unicode icons that work reliably
 ICONS = {
     "dashboard":   "  \u25A0",
