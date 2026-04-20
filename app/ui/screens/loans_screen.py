@@ -1,6 +1,6 @@
 """
 app/ui/screens/loans_screen.py
-Updated: date pickers, collateral photo upload, icon labels restored
+Updated: date pickers, collateral photo upload, icon labels restored, placeholders added
 """
 
 import customtkinter as ctk
@@ -21,7 +21,7 @@ class LoansScreen(ctk.CTkFrame):
         self.master = master
         self.current_user = master.current_user
         self.selected_loan = None
-        self._collateral_files = []   # list of file paths staged for upload
+        self._collateral_files = []
         self._build()
         self._load_loans()
 
@@ -55,7 +55,6 @@ class LoansScreen(ctk.CTkFrame):
                      text_color=COLORS["accent_green_dark"]).grid(
             row=0, column=0, sticky="w", pady=(0, 16))
 
-        # Filter + search
         filter_row = ctk.CTkFrame(panel, fg_color="transparent")
         filter_row.grid(row=1, column=0, sticky="ew", pady=(0, 12))
         filter_row.columnconfigure(1, weight=1)
@@ -73,7 +72,7 @@ class LoansScreen(ctk.CTkFrame):
         self.search_var = ctk.StringVar()
         self.search_var.trace_add("write", lambda *a: self._load_loans())
         ctk.CTkEntry(filter_row, textvariable=self.search_var,
-                     placeholder_text="Search client name...",
+                     placeholder_text="🔍  Search by client name...",
                      **input_style()).grid(row=0, column=1, sticky="ew", padx=(0, 8))
 
         ctk.CTkButton(filter_row, text="+ New Loan", width=120,
@@ -124,9 +123,14 @@ class LoansScreen(ctk.CTkFrame):
                      text_color=COLORS["accent_green_dark"]).pack(
             anchor="w", padx=20, pady=(20, 4))
 
-        status_colors = {"pending": COLORS["warning"], "approved": COLORS["info"],
-                         "active": COLORS["accent_green"], "completed": COLORS["text_muted"],
-                         "defaulted": COLORS["danger"], "rejected": COLORS["danger"]}
+        status_colors = {
+            "pending":   COLORS["warning"],
+            "approved":  COLORS["info"],
+            "active":    COLORS["accent_green"],
+            "completed": COLORS["text_muted"],
+            "defaulted": COLORS["danger"],
+            "rejected":  COLORS["danger"],
+        }
         sc = status_colors.get(loan.status.value, COLORS["text_secondary"])
         ctk.CTkLabel(self.detail_panel, text=loan.status.value.upper(),
                      font=FONTS["badge"], text_color=sc).pack(anchor="w", padx=20)
@@ -135,7 +139,7 @@ class LoansScreen(ctk.CTkFrame):
 
         from app.core.services.client_service import ClientService
         from app.core.services.repayment_service import RepaymentService
-        client = ClientService.get_client_by_id(loan.client_id)
+        client  = ClientService.get_client_by_id(loan.client_id)
         balance = RepaymentService.get_outstanding_balance(loan.id)
 
         details = [
@@ -163,20 +167,18 @@ class LoansScreen(ctk.CTkFrame):
                          anchor="w").pack(side="left")
 
         # Collateral thumbnails
-        from app.core.services.loan_service import LoanService
         from app.database.connection import get_db
         from app.core.models.collateral import Collateral
         with get_db() as db:
             collaterals = db.query(Collateral).filter_by(loan_id=loan.id).all()
-            coll_data = [(c.description, c.file_path) for c in collaterals]
+            coll_data   = [(c.description, c.file_path) for c in collaterals]
 
         if coll_data:
             ctk.CTkFrame(self.detail_panel, fg_color=COLORS["border"],
                          height=1).pack(fill="x", padx=20, pady=8)
             ctk.CTkLabel(self.detail_panel, text="Collateral Documents",
                          font=FONTS["subheading"],
-                         text_color=COLORS["text_secondary"]).pack(
-                anchor="w", padx=20)
+                         text_color=COLORS["text_secondary"]).pack(anchor="w", padx=20)
             coll_grid = ctk.CTkFrame(self.detail_panel, fg_color="transparent")
             coll_grid.pack(fill="x", padx=20, pady=8)
             for i, (desc, fpath) in enumerate(coll_data):
@@ -188,7 +190,7 @@ class LoansScreen(ctk.CTkFrame):
                     try:
                         img = Image.open(fpath)
                         img.thumbnail((72, 72))
-                        ctkimg = ctk.CTkImage(light_image=img, dark_image=img, size=(72,72))
+                        ctkimg = ctk.CTkImage(light_image=img, dark_image=img, size=(72, 72))
                         ctk.CTkLabel(tile, image=ctkimg, text="",
                                      fg_color="transparent").pack(expand=True)
                     except Exception:
@@ -197,10 +199,8 @@ class LoansScreen(ctk.CTkFrame):
                 else:
                     ctk.CTkLabel(tile, text="DOC", font=FONTS["caption"],
                                  text_color=COLORS["text_muted"]).pack(expand=True)
-                ctk.CTkLabel(coll_grid, text=desc[:12],
-                             font=FONTS["caption"],
-                             text_color=COLORS["text_muted"]).grid(
-                    row=1, column=i, padx=4)
+                ctk.CTkLabel(coll_grid, text=desc[:12], font=FONTS["caption"],
+                             text_color=COLORS["text_muted"]).grid(row=1, column=i, padx=4)
 
         ctk.CTkFrame(self.detail_panel, fg_color=COLORS["border"],
                      height=1).pack(fill="x", padx=20, pady=12)
@@ -211,32 +211,32 @@ class LoansScreen(ctk.CTkFrame):
         btn_frame.columnconfigure(1, weight=1)
 
         if loan.status.value == "pending":
-            ctk.CTkButton(btn_frame, text="Approve",
+            ctk.CTkButton(btn_frame, text="✔  Approve",
                           fg_color=COLORS["accent_green"],
                           hover_color=COLORS["accent_green_dark"],
                           text_color="#FFFFFF", font=FONTS["button"],
                           corner_radius=8, height=38,
                           command=lambda: self._approve_loan(loan.id)).grid(
                 row=0, column=0, padx=(0, 4), sticky="ew")
-            ctk.CTkButton(btn_frame, text="Reject",
+            ctk.CTkButton(btn_frame, text="✖  Reject",
                           command=lambda: self._reject_loan(loan.id),
                           **danger_button_style()).grid(
                 row=0, column=1, padx=(4, 0), sticky="ew")
         elif loan.status.value == "active":
-            ctk.CTkButton(btn_frame, text="Record Payment",
+            ctk.CTkButton(btn_frame, text="💳  Record Payment",
                           command=lambda: self.master.show_screen("repayments"),
                           **primary_button_style()).grid(
                 row=0, column=0, columnspan=2, sticky="ew")
 
         if loan.risk_score is None:
-            ctk.CTkButton(self.detail_panel, text="Run AI Risk Assessment",
+            ctk.CTkButton(self.detail_panel, text="🤖  Run AI Risk Assessment",
                           command=lambda: self.master.show_screen("agent"),
                           **secondary_button_style()).pack(
                 fill="x", padx=20, pady=(0, 20))
 
     # ── New loan form ─────────────────────────────────────────────────────
     def _new_loan_form(self):
-        self.selected_loan = None
+        self.selected_loan   = None
         self._collateral_files = []
         for w in self.detail_panel.winfo_children(): w.destroy()
 
@@ -247,76 +247,108 @@ class LoansScreen(ctk.CTkFrame):
 
         self.loan_vars = {}
 
-        # Client finder
+        # ── Client finder ─────────────────────────────────────────────
+        self._section_label("Client Information")
+
         ctk.CTkLabel(self.detail_panel, text="Client NIN or Name *",
                      font=FONTS["body_small"],
                      text_color=COLORS["text_secondary"],
                      anchor="w").pack(fill="x", padx=20, pady=(0, 2))
         self.client_search_var = ctk.StringVar()
-        ctk.CTkEntry(self.detail_panel, textvariable=self.client_search_var,
-                     placeholder_text="Type NIN or full name...",
-                     **input_style()).pack(fill="x", padx=20)
+        ctk.CTkEntry(
+            self.detail_panel,
+            textvariable=self.client_search_var,
+            placeholder_text="e.g.  CM12345678  or  John Mukasa",
+            **input_style(),
+        ).pack(fill="x", padx=20)
 
         self.client_result_label = ctk.CTkLabel(
             self.detail_panel, text="", font=FONTS["caption"],
             text_color=COLORS["text_muted"])
         self.client_result_label.pack(anchor="w", padx=20)
-        ctk.CTkButton(self.detail_panel, text="Find Client", height=32,
-                      font=FONTS["body_small"],
-                      fg_color=COLORS["bg_input"],
-                      hover_color=COLORS["border"],
-                      text_color=COLORS["text_primary"], corner_radius=6,
-                      command=self._find_client).pack(anchor="w", padx=20, pady=(4, 12))
 
-        # Loan type
+        ctk.CTkButton(
+            self.detail_panel, text="🔍  Find Client", height=32,
+            font=FONTS["body_small"],
+            fg_color=COLORS["bg_input"],
+            hover_color=COLORS["border"],
+            text_color=COLORS["text_primary"],
+            corner_radius=6,
+            command=self._find_client,
+        ).pack(anchor="w", padx=20, pady=(4, 12))
+
+        # ── Loan details ──────────────────────────────────────────────
+        self._section_label("Loan Details")
+
         ctk.CTkLabel(self.detail_panel, text="Loan Type *",
                      font=FONTS["body_small"],
                      text_color=COLORS["text_secondary"],
                      anchor="w").pack(fill="x", padx=20, pady=(0, 2))
         self.loan_type_var = ctk.StringVar(value=LOAN_TYPES[0])
-        ctk.CTkOptionMenu(self.detail_panel, variable=self.loan_type_var,
-                          values=LOAN_TYPES,
-                          fg_color=COLORS["bg_input"],
-                          button_color=COLORS["accent_green"],
-                          text_color=COLORS["text_primary"],
-                          font=FONTS["body_small"]).pack(fill="x", padx=20)
+        ctk.CTkOptionMenu(
+            self.detail_panel,
+            variable=self.loan_type_var,
+            values=LOAN_TYPES,
+            fg_color=COLORS["bg_input"],
+            button_color=COLORS["accent_green"],
+            text_color=COLORS["text_primary"],
+            font=FONTS["body_small"],
+        ).pack(fill="x", padx=20)
 
-        # Amount + duration
-        for key, label in [("principal_amount", "Principal Amount (UGX) *"),
-                            ("duration_months", "Duration (months) *")]:
-            ctk.CTkLabel(self.detail_panel, text=label,
-                         font=FONTS["body_small"],
-                         text_color=COLORS["text_secondary"],
-                         anchor="w").pack(fill="x", padx=20, pady=(10, 2))
-            var = ctk.StringVar()
-            self.loan_vars[key] = var
-            ctk.CTkEntry(self.detail_panel, textvariable=var,
-                         **input_style()).pack(fill="x", padx=20)
+        # Principal amount
+        ctk.CTkLabel(self.detail_panel, text="Principal Amount (UGX) *",
+                     font=FONTS["body_small"],
+                     text_color=COLORS["text_secondary"],
+                     anchor="w").pack(fill="x", padx=20, pady=(10, 2))
+        var_p = ctk.StringVar()
+        self.loan_vars["principal_amount"] = var_p
+        ctk.CTkEntry(
+            self.detail_panel,
+            textvariable=var_p,
+            placeholder_text="e.g.  500000",
+            **input_style(),
+        ).pack(fill="x", padx=20)
+
+        # Duration
+        ctk.CTkLabel(self.detail_panel, text="Duration (months) *",
+                     font=FONTS["body_small"],
+                     text_color=COLORS["text_secondary"],
+                     anchor="w").pack(fill="x", padx=20, pady=(10, 2))
+        var_d = ctk.StringVar()
+        self.loan_vars["duration_months"] = var_d
+        ctk.CTkEntry(
+            self.detail_panel,
+            textvariable=var_d,
+            placeholder_text="e.g.  12",
+            **input_style(),
+        ).pack(fill="x", padx=20)
 
         self.loan_vars["principal_amount"].trace_add("write", self._update_interest_preview)
         self.loan_vars["duration_months"].trace_add("write", self._update_interest_preview)
 
-        # Application date picker
-        ctk.CTkFrame(self.detail_panel, fg_color="transparent",
-                     height=8).pack()
+        # ── Application date ──────────────────────────────────────────
         ctk.CTkLabel(self.detail_panel, text="Application Date *",
                      font=FONTS["body_small"],
                      text_color=COLORS["text_secondary"],
-                     anchor="w").pack(fill="x", padx=20, pady=(0, 2))
+                     anchor="w").pack(fill="x", padx=20, pady=(10, 2))
         date_row = ctk.CTkFrame(self.detail_panel, fg_color="transparent")
         date_row.pack(fill="x", padx=20)
         date_row.columnconfigure(0, weight=1)
         self.application_date_picker = DatePicker(date_row, initial_date=date.today())
         self.application_date_picker.grid(row=0, column=0, sticky="ew")
 
-        # Purpose
+        # ── Purpose ───────────────────────────────────────────────────
         ctk.CTkLabel(self.detail_panel, text="Purpose / Reason",
                      font=FONTS["body_small"],
                      text_color=COLORS["text_secondary"],
                      anchor="w").pack(fill="x", padx=20, pady=(10, 2))
         self.purpose_var = ctk.StringVar()
-        ctk.CTkEntry(self.detail_panel, textvariable=self.purpose_var,
-                     **input_style()).pack(fill="x", padx=20)
+        ctk.CTkEntry(
+            self.detail_panel,
+            textvariable=self.purpose_var,
+            placeholder_text="e.g.  School fees, Business capital, Asset purchase...",
+            **input_style(),
+        ).pack(fill="x", padx=20)
 
         # Interest preview
         self.interest_preview = ctk.CTkLabel(
@@ -325,37 +357,34 @@ class LoansScreen(ctk.CTkFrame):
             text_color=COLORS["accent_green_dark"])
         self.interest_preview.pack(anchor="w", padx=20, pady=(8, 0))
 
-        # ── COLLATERAL SECTION ────────────────────────────────────────
-        ctk.CTkFrame(self.detail_panel, fg_color=COLORS["border"],
-                     height=1).pack(fill="x", padx=20, pady=12)
-        ctk.CTkLabel(self.detail_panel, text="Collateral Documents",
-                     font=FONTS["subheading"],
-                     text_color=COLORS["text_secondary"]).pack(
-            anchor="w", padx=20)
-        ctk.CTkLabel(self.detail_panel,
-                     text="Add photos or scanned documents (land title, logbook, etc.)",
-                     font=FONTS["caption"],
-                     text_color=COLORS["text_muted"]).pack(
-            anchor="w", padx=20, pady=(2, 8))
+        # ── Collateral ────────────────────────────────────────────────
+        self._section_label("Collateral Documents")
+
+        ctk.CTkLabel(
+            self.detail_panel,
+            text="Attach photos or scans of collateral (land title, logbook, etc.)",
+            font=FONTS["caption"],
+            text_color=COLORS["text_muted"],
+        ).pack(anchor="w", padx=20, pady=(0, 8))
 
         coll_btn_row = ctk.CTkFrame(self.detail_panel, fg_color="transparent")
         coll_btn_row.pack(fill="x", padx=20)
-        ctk.CTkButton(coll_btn_row, text="+ Add Photo / Document",
-                      height=36, font=FONTS["body_small"],
-                      fg_color=COLORS["accent_green"],
-                      hover_color=COLORS["accent_green_dark"],
-                      text_color="#FFFFFF", corner_radius=8,
-                      command=self._add_collateral).pack(side="left")
+        ctk.CTkButton(
+            coll_btn_row, text="📎  Add Photo / Document",
+            height=36, font=FONTS["body_small"],
+            fg_color=COLORS["accent_green"],
+            hover_color=COLORS["accent_green_dark"],
+            text_color="#FFFFFF", corner_radius=8,
+            command=self._add_collateral,
+        ).pack(side="left")
 
         self.coll_count_label = ctk.CTkLabel(
-            coll_btn_row, text="0 files added",
+            coll_btn_row, text="No files added yet",
             font=FONTS["caption"],
             text_color=COLORS["text_muted"])
         self.coll_count_label.pack(side="left", padx=(12, 0))
 
-        # Collateral thumbnails frame
-        self.coll_thumb_frame = ctk.CTkFrame(
-            self.detail_panel, fg_color="transparent")
+        self.coll_thumb_frame = ctk.CTkFrame(self.detail_panel, fg_color="transparent")
         self.coll_thumb_frame.pack(fill="x", padx=20, pady=8)
 
         # ── Error + Submit ─────────────────────────────────────────────
@@ -364,24 +393,36 @@ class LoansScreen(ctk.CTkFrame):
             font=FONTS["body_small"], text_color=COLORS["danger"])
         self.loan_form_error.pack(padx=20, pady=(8, 0))
 
-        ctk.CTkButton(self.detail_panel, text="Submit Loan Application",
-                      command=self._submit_loan,
-                      **primary_button_style()).pack(
-            fill="x", padx=20, pady=(12, 20))
+        ctk.CTkButton(
+            self.detail_panel,
+            text="✔  Submit Loan Application",
+            command=self._submit_loan,
+            **primary_button_style(),
+        ).pack(fill="x", padx=20, pady=(12, 20))
 
         self.found_client_id = None
 
+    def _section_label(self, text: str):
+        """Render a styled section divider with a label."""
+        ctk.CTkFrame(self.detail_panel, fg_color=COLORS["border"],
+                     height=1).pack(fill="x", padx=20, pady=(14, 0))
+        ctk.CTkLabel(
+            self.detail_panel, text=text,
+            font=FONTS["subheading"],
+            text_color=COLORS["accent_green_dark"],
+            anchor="w",
+        ).pack(fill="x", padx=20, pady=(6, 6))
+
+    # ── Collateral helpers ────────────────────────────────────────────────
     def _add_collateral(self):
-        """Open file dialog to select photos/documents."""
         from tkinter import filedialog
-        filetypes = [
-            ("Image files", "*.jpg *.jpeg *.png *.bmp *.gif *.tiff"),
-            ("PDF files", "*.pdf"),
-            ("All files", "*.*"),
-        ]
         files = filedialog.askopenfilenames(
             title="Select Collateral Documents",
-            filetypes=filetypes)
+            filetypes=[
+                ("Image files", "*.jpg *.jpeg *.png *.bmp *.gif *.tiff"),
+                ("PDF files",   "*.pdf"),
+                ("All files",   "*.*"),
+            ])
         if files:
             for f in files:
                 if f not in self._collateral_files:
@@ -390,19 +431,19 @@ class LoansScreen(ctk.CTkFrame):
 
     def _refresh_collateral_thumbs(self):
         for w in self.coll_thumb_frame.winfo_children(): w.destroy()
+        count = len(self._collateral_files)
         self.coll_count_label.configure(
-            text=f"{len(self._collateral_files)} file(s) added")
+            text=f"{count} file{'s' if count != 1 else ''} added")
         for i, fpath in enumerate(self._collateral_files):
             tile = ctk.CTkFrame(self.coll_thumb_frame,
                                 fg_color=COLORS["bg_input"],
                                 corner_radius=6, width=72, height=72)
-            tile.grid(row=0, column=i*2, padx=4, pady=4)
+            tile.grid(row=0, column=i * 2, padx=4, pady=4)
             tile.grid_propagate(False)
-            # Try to show image preview
             try:
                 img = Image.open(fpath)
                 img.thumbnail((66, 66))
-                ctkimg = ctk.CTkImage(light_image=img, dark_image=img, size=(66,66))
+                ctkimg = ctk.CTkImage(light_image=img, dark_image=img, size=(66, 66))
                 ctk.CTkLabel(tile, image=ctkimg, text="",
                              fg_color="transparent").pack(expand=True)
             except Exception:
@@ -410,42 +451,42 @@ class LoansScreen(ctk.CTkFrame):
                 ctk.CTkLabel(tile, text=ext or "DOC",
                              font=FONTS["caption"],
                              text_color=COLORS["text_muted"]).pack(expand=True)
-            # File name truncated
             fname = os.path.basename(fpath)[:10]
             ctk.CTkLabel(self.coll_thumb_frame, text=fname,
                          font=FONTS["caption"],
-                         text_color=COLORS["text_muted"]).grid(
-                row=1, column=i*2, padx=4)
-            # Remove button
+                         text_color=COLORS["text_muted"]).grid(row=1, column=i * 2, padx=4)
             ctk.CTkButton(
-                self.coll_thumb_frame, text="x", width=20, height=20,
+                self.coll_thumb_frame, text="✕", width=20, height=20,
                 fg_color=COLORS["danger"], hover_color="#A93226",
                 text_color="#FFFFFF", font=("Helvetica", 10), corner_radius=4,
-                command=lambda p=fpath: self._remove_collateral(p)).grid(
-                row=0, column=i*2+1, sticky="n")
+                command=lambda p=fpath: self._remove_collateral(p),
+            ).grid(row=0, column=i * 2 + 1, sticky="n")
 
     def _remove_collateral(self, fpath):
         if fpath in self._collateral_files:
             self._collateral_files.remove(fpath)
         self._refresh_collateral_thumbs()
 
+    # ── Client search ─────────────────────────────────────────────────────
     def _find_client(self):
         from app.core.services.client_service import ClientService
         term = self.client_search_var.get().strip()
-        if not term: return
+        if not term:
+            return
         clients = ClientService.get_all_clients(search=term)
         if clients:
             c = clients[0]
             self.found_client_id = c.id
             self.client_result_label.configure(
-                text=f"Found: {c.full_name}  (NIN: {c.nin or '—'})",
+                text=f"✔  Found: {c.full_name}  (NIN: {c.nin or '—'})",
                 text_color=COLORS["accent_green"])
         else:
             self.found_client_id = None
             self.client_result_label.configure(
-                text="No client found. Register the client first.",
+                text="✖  No client found. Please register the client first.",
                 text_color=COLORS["danger"])
 
+    # ── Interest preview ──────────────────────────────────────────────────
     def _update_interest_preview(self, *args):
         try:
             principal = float(self.loan_vars["principal_amount"].get())
@@ -454,17 +495,22 @@ class LoansScreen(ctk.CTkFrame):
             total     = principal + interest
             monthly   = total / months
             self.interest_preview.configure(
-                text=f"Interest: UGX {interest:,.0f}  |  Total: UGX {total:,.0f}  |  Monthly: UGX {monthly:,.0f}")
+                text=(f"Interest: UGX {interest:,.0f}  |  "
+                      f"Total: UGX {total:,.0f}  |  "
+                      f"Monthly: UGX {monthly:,.0f}"))
         except Exception:
             self.interest_preview.configure(text="")
 
+    # ── Submit ────────────────────────────────────────────────────────────
     def _submit_loan(self):
         from app.core.services.loan_service import LoanService
         from app.database.connection import get_db
         from app.core.models.collateral import Collateral
+        from app.core.models.loan import Loan
 
         if not getattr(self, "found_client_id", None):
-            self.loan_form_error.configure(text="Please find and select a client first.")
+            self.loan_form_error.configure(
+                text="⚠  Please find and select a client first.")
             return
         try:
             principal = float(self.loan_vars["principal_amount"].get())
@@ -481,16 +527,12 @@ class LoansScreen(ctk.CTkFrame):
                 purpose=purpose,
                 created_by_id=self.current_user.id if self.current_user else None,
             )
-            # Override the application date with the picked one
-            from app.database.connection import get_db
-            from app.core.models.loan import Loan
             with get_db() as db:
                 l = db.query(Loan).filter_by(id=loan.id).first()
                 if l:
                     l.application_date = app_date
                     db.commit()
 
-            # Save collateral files
             os.makedirs(COLLATERAL_UPLOAD_DIR, exist_ok=True)
             with get_db() as db:
                 for fpath in self._collateral_files:
@@ -499,11 +541,12 @@ class LoansScreen(ctk.CTkFrame):
                     shutil.copy2(fpath, dest)
                     coll = Collateral(
                         loan_id=loan.id,
-                        description=os.path.splitext(os.path.basename(fpath))[0][:100],
+                        description=os.path.splitext(
+                            os.path.basename(fpath))[0][:100],
                         file_name=fname,
                         file_path=dest,
                         file_type=os.path.splitext(fpath)[1].lower(),
-                        file_size_kb=int(os.path.getsize(fpath)/1024),
+                        file_size_kb=int(os.path.getsize(fpath) / 1024),
                         uploaded_by_id=self.current_user.id if self.current_user else None,
                     )
                     db.add(coll)
@@ -513,12 +556,15 @@ class LoansScreen(ctk.CTkFrame):
             self._collateral_files = []
             self._load_loans()
             self._show_empty_state()
-        except Exception as e:
-            self.loan_form_error.configure(text=str(e))
 
+        except Exception as e:
+            self.loan_form_error.configure(text=f"⚠  {e}")
+
+    # ── Approve / reject ──────────────────────────────────────────────────
     def _approve_loan(self, loan_id):
         from app.core.services.loan_service import LoanService
-        LoanService.approve_loan(loan_id,
+        LoanService.approve_loan(
+            loan_id,
             approved_by_id=self.current_user.id if self.current_user else None)
         self._load_loans()
         self._show_empty_state()
@@ -529,6 +575,7 @@ class LoansScreen(ctk.CTkFrame):
         self._load_loans()
         self._show_empty_state()
 
+    # ── Load loans table ──────────────────────────────────────────────────
     def _load_loans(self, *args):
         from app.core.services.loan_service import LoanService
         from app.core.services.client_service import ClientService
@@ -541,7 +588,7 @@ class LoansScreen(ctk.CTkFrame):
         for loan in loans:
             client = ClientService.get_client_by_id(loan.client_id)
             rows.append({
-                "id": loan.id,
+                "id":          loan.id,
                 "loan_number": loan.loan_number,
                 "client_name": client.full_name if client else "—",
                 "loan_type":   loan.loan_type.value if loan.loan_type else "—",
