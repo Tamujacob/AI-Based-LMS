@@ -1,5 +1,5 @@
 """
-app/ui/app_root.py
+app/ui/app_root.py — Updated with users and logs screens
 """
 
 import customtkinter as ctk
@@ -46,7 +46,6 @@ class AppRoot(ctk.CTk):
                 except Exception:
                     pass
                 self.current_screen = None
-
             try:
                 screen_class = self._get_screen_class(screen_name)
                 self.current_screen = screen_class(self, **kwargs)
@@ -54,9 +53,8 @@ class AppRoot(ctk.CTk):
                 self.update()
                 self.update_idletasks()
             except Exception as e:
-                print(f"[AppRoot] Error loading screen '{screen_name}': {e}")
-                import traceback
-                traceback.print_exc()
+                print(f"[AppRoot] Error loading '{screen_name}': {e}")
+                import traceback; traceback.print_exc()
             finally:
                 self._transition_pending = False
                 self.after(50, self.update)
@@ -89,6 +87,12 @@ class AppRoot(ctk.CTk):
             elif name == "chatbot":
                 from app.ui.screens.chatbot_screen import ChatbotScreen
                 self._screens["chatbot"] = ChatbotScreen
+            elif name == "users":
+                from app.ui.screens.users_screen import UsersScreen
+                self._screens["users"] = UsersScreen
+            elif name == "logs":
+                from app.ui.screens.logs_screen import LogsScreen
+                self._screens["logs"] = LogsScreen
             elif name == "settings":
                 from app.ui.screens.settings_screen import SettingsScreen
                 self._screens["settings"] = SettingsScreen
