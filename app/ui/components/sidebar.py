@@ -1,5 +1,5 @@
 """
-app/ui/components/sidebar.py - Updated with Users and Logs tabs
+app/ui/components/sidebar.py - Updated with colorful emoji icons
 """
 
 import customtkinter as ctk
@@ -8,16 +8,16 @@ import os
 from app.ui.styles.theme import COLORS, FONTS, SIDEBAR_WIDTH
 
 NAV_ITEMS = [
-    ("dashboard",  "Dashboard"),
-    ("clients",    "Clients"),
-    ("loans",      "Loans"),
-    ("repayments", "Repayments"),
-    ("agent",      "AI Agent"),
-    ("chatbot",    "AI Chatbot"),
-    ("reports",    "Reports"),
-    ("users",      "Users"),
-    ("logs",       "Activity Logs"),
-    ("settings",   "Settings"),
+    ("dashboard",  "🏠",  "Dashboard"),
+    ("clients",    "👥",  "Clients"),
+    ("loans",      "💰",  "Loans"),
+    ("repayments", "💳",  "Repayments"),
+    ("agent",      "🤖",  "AI Agent"),
+    ("chatbot",    "💬",  "AI Chatbot"),
+    ("reports",    "📊",  "Reports"),
+    ("users",      "🔑",  "Users"),
+    ("logs",       "📋",  "Activity Logs"),
+    ("settings",   "⚙️",  "Settings"),
 ]
 
 
@@ -35,7 +35,7 @@ class Sidebar(ctk.CTkFrame):
         self._build()
 
     def _build(self):
-        # Logo section
+        # ── Logo section ─────────────────────────────────────────────────
         logo_frame = ctk.CTkFrame(self, fg_color=COLORS["accent_green_dark"],
                                    corner_radius=0)
         logo_frame.pack(fill="x")
@@ -70,43 +70,68 @@ class Sidebar(ctk.CTkFrame):
                          font=("Georgia", 10, "italic"),
                          text_color=COLORS["sidebar_muted"]).pack(pady=(0, 12), padx=16)
 
-        # Gold divider
+        # ── Gold divider ──────────────────────────────────────────────────
         ctk.CTkFrame(self, fg_color=COLORS["accent_gold"],
                      height=2, corner_radius=0).pack(fill="x")
         ctk.CTkFrame(self, fg_color="transparent", height=6).pack()
 
-        # Scrollable nav area
+        # ── Scrollable nav area ───────────────────────────────────────────
         nav_scroll = ctk.CTkScrollableFrame(
             self, fg_color="transparent",
             scrollbar_button_color=COLORS["sidebar_hover"])
         nav_scroll.pack(fill="both", expand=True, padx=8)
 
-        for screen_name, label in NAV_ITEMS:
+        for screen_name, icon, label in NAV_ITEMS:
             # Only show Users and Logs for manager/admin
             if screen_name in ("users", "logs") and self.current_user:
                 if self.current_user.role.value == "loan_officer":
                     continue
 
             is_active = screen_name == self.current_screen
-            ctk.CTkButton(
-                nav_scroll,
-                text=f"  {label}",
-                anchor="w",
-                height=42,
-                corner_radius=8,
-                font=FONTS["nav"],
-                fg_color=COLORS["accent_gold"] if is_active else "transparent",
-                text_color=COLORS["text_on_gold"] if is_active
-                           else COLORS["sidebar_text"],
-                hover_color=COLORS["sidebar_hover"],
-                border_width=0,
-                command=lambda s=screen_name: self.on_navigate(s),
-            ).pack(fill="x", pady=2)
 
-        # Divider + user info
+            # Outer container for each nav row
+            row_frame = ctk.CTkFrame(
+                nav_scroll,
+                fg_color=COLORS["accent_gold"] if is_active else "transparent",
+                corner_radius=8,
+                cursor="hand2",
+            )
+            row_frame.pack(fill="x", pady=2)
+
+            # Emoji icon label
+            icon_lbl = ctk.CTkLabel(
+                row_frame,
+                text=icon,
+                font=("Segoe UI Emoji", 18),
+                text_color=COLORS["text_on_gold"] if is_active else COLORS["sidebar_text"],
+                width=38,
+                anchor="center",
+            )
+            icon_lbl.pack(side="left", padx=(8, 0), pady=8)
+
+            # Nav text label
+            text_lbl = ctk.CTkLabel(
+                row_frame,
+                text=label,
+                font=FONTS["nav"],
+                text_color=COLORS["text_on_gold"] if is_active else COLORS["sidebar_text"],
+                anchor="w",
+            )
+            text_lbl.pack(side="left", fill="x", expand=True, padx=(6, 8), pady=8)
+
+            # Bind clicks and hover on entire row, icon, and label
+            for widget in (row_frame, icon_lbl, text_lbl):
+                widget.bind("<Button-1>", lambda e, s=screen_name: self.on_navigate(s))
+                widget.bind("<Enter>", lambda e, f=row_frame, a=is_active: f.configure(
+                    fg_color=COLORS["accent_gold"] if a else COLORS["sidebar_hover"]))
+                widget.bind("<Leave>", lambda e, f=row_frame, a=is_active: f.configure(
+                    fg_color=COLORS["accent_gold"] if a else "transparent"))
+
+        # ── Divider ───────────────────────────────────────────────────────
         ctk.CTkFrame(self, fg_color=COLORS["accent_gold"],
                      height=1, corner_radius=0).pack(fill="x", padx=16, pady=(4, 0))
 
+        # ── User info ─────────────────────────────────────────────────────
         if self.current_user:
             user_frame = ctk.CTkFrame(self, fg_color="transparent")
             user_frame.pack(fill="x", padx=16, pady=(8, 4))
@@ -120,12 +145,33 @@ class Sidebar(ctk.CTkFrame):
                          text_color=COLORS["sidebar_muted"],
                          anchor="w").pack(fill="x")
 
-        ctk.CTkButton(
-            self, text="  Logout",
-            anchor="w", height=38, corner_radius=8,
-            font=FONTS["nav"],
-            fg_color="transparent",
+        # ── Logout row ────────────────────────────────────────────────────
+        logout_frame = ctk.CTkFrame(self, fg_color="transparent",
+                                     corner_radius=8, cursor="hand2")
+        logout_frame.pack(fill="x", padx=10, pady=(4, 14))
+
+        logout_icon = ctk.CTkLabel(
+            logout_frame,
+            text="🚪",
+            font=("Segoe UI Emoji", 18),
             text_color=COLORS["accent_gold"],
-            hover_color=COLORS["sidebar_hover"],
-            command=lambda: self.on_navigate("logout"),
-        ).pack(fill="x", padx=10, pady=(4, 14))
+            width=38,
+            anchor="center",
+        )
+        logout_icon.pack(side="left", padx=(8, 0), pady=8)
+
+        logout_lbl = ctk.CTkLabel(
+            logout_frame,
+            text="Logout",
+            font=FONTS["nav"],
+            text_color=COLORS["accent_gold"],
+            anchor="w",
+        )
+        logout_lbl.pack(side="left", fill="x", expand=True, padx=(6, 8), pady=8)
+
+        for widget in (logout_frame, logout_icon, logout_lbl):
+            widget.bind("<Button-1>", lambda e: self.on_navigate("logout"))
+            widget.bind("<Enter>", lambda e: logout_frame.configure(
+                fg_color=COLORS["sidebar_hover"]))
+            widget.bind("<Leave>", lambda e: logout_frame.configure(
+                fg_color="transparent"))
