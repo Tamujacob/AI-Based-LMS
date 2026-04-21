@@ -1,45 +1,50 @@
 # AI-Based Loans Management System
 
-> A production-grade, agentic AI-powered desktop loan management system built with Python.  
+> A production-grade, agentic AI-powered desktop loan management system built with Python 3.12.
 > Developed as a Final Year Project at **Bugema University** and deployed at **Bingongold Credit**, Ham Tower, Wandegeya, Kampala, Uganda.
 
 ---
 
 ## Overview
 
-The AI-Based LMS replaces manual, paper-based loan management with a fully automated, intelligent desktop application. It supports the complete loan lifecycle — from client registration and loan application through to repayment tracking, AI-powered risk assessment, and natural language interaction via a built-in chatbot.
-
-The system was designed and case-studied at **Bingongold Credit**, a growing microfinance institution in Kampala that offers Business Loans, School Fees Loans, Tax Clearance Loans, Development Loans, and Asset Acquisition Loans at a fixed 10% interest rate.
+The AI-Based LMS replaces the manual, paper-based loan management process at Bingongold Credit with a fully automated, intelligent desktop application. It covers the complete loan lifecycle — client registration, loan application, collateral management, repayment tracking, AI-powered risk assessment, natural language chatbot interaction, document generation, user management, and activity logging.
 
 ---
 
 ## Key Features
 
-- **Role-Based Access Control** — Admin, Manager, and Loan Officer roles with separate permissions
-- **Client Management** — Full borrower profiles with NIN, contact details, next of kin, and employment info
-- **Loan Processing** — Application, approval workflow, and automated 10% interest calculation
-- **Repayment Tracking** — Real-time payment recording, outstanding balance, and overdue detection
-- **AI Risk Agent** — Powered by Anthropic Claude API: risk scoring (LOW / MEDIUM / HIGH), portfolio alerts, and loan health summaries
-- **AI Chatbot** — Ask questions in plain English: *"Show all overdue loans"*, *"How much has John paid?"*
-- **Reports & Exports** — Generate PDF and Word documents for loan agreements and financial summaries
-- **Collateral Management** — Attach and manage document scans and photos per loan
-- **Audit Trail** — Every action is logged for accountability and transparency
+- **Role-Based Access Control** — Admin, Manager, and Loan Officer with separate permissions
+- **Client Management** — Full borrower profiles with NIN uniqueness check, next-of-kin, and soft-delete
+- **Loan Processing** — Application form with date picker, collateral photo upload, automated 10% interest calculation
+- **Repayment Tracking** — Date picker, outstanding balance, auto-complete on full payment
+- **Print Receipt** — Generates A5 PDF receipt with Bingongold letterhead and signature line
+- **Loan Agreement** — Full A4 PDF with borrower details, financial terms, 6 conditions, and signature/stamp section
+- **AI Risk Agent** — Powered by Anthropic Claude: LOW/MEDIUM/HIGH scoring, portfolio scan, overdue alerts
+- **AI Chatbot** — Natural language queries with live database context (RAG)
+- **Users Management** — Create, activate, deactivate accounts; reset passwords (Manager/Admin)
+- **Activity Logs** — Full filterable audit trail with PDF export (Manager/Admin)
+- **Reports** — Portfolio summary, overdue report, repayment history, client register (PDF + Word)
+- **Collateral Documents** — Upload photos/scans directly from computer; thumbnails shown in loan view
+- **Audit Trail** — Every system action logged with user, entity, and timestamp
 
 ---
 
 ## Tech Stack
 
-| Layer | Technology |
-|-------|-----------|
-| Language | Python 3.12 |
-| UI Framework | CustomTkinter |
-| Database | PostgreSQL 16 |
-| ORM | SQLAlchemy 2.x |
-| AI / LLM | Anthropic Claude API (`claude-sonnet-4-20250514`) |
-| ML Risk Model | Scikit-learn (Logistic Regression) |
-| Reports | ReportLab (PDF), python-docx (Word) |
-| Config | python-dotenv |
-| Migrations | Alembic |
+| Layer | Technology | Version |
+|-------|-----------|---------|
+| Language | Python | 3.12 |
+| UI Framework | CustomTkinter | 5.2.2 |
+| Database | PostgreSQL | 16 |
+| ORM | SQLAlchemy | 2.0.x |
+| AI / LLM | Anthropic Claude API | claude-sonnet-4 |
+| Password Security | bcrypt | 4.2.x |
+| PDF Reports | ReportLab | 4.2.x |
+| Word Reports | python-docx | 1.1.x |
+| Date Picker | tkcalendar | 1.6.x |
+| Image Processing | Pillow | 10.x |
+| Configuration | python-dotenv | 1.0.x |
+| Migrations | Alembic | 1.14.x |
 
 ---
 
@@ -48,118 +53,140 @@ The system was designed and case-studied at **Bingongold Credit**, a growing mic
 ```
 AI-Based_LMS/
 │
-├── main.py                          # Application entry point — run this to start
-├── .env                             # Environment variables (never commit to Git)
-├── .env.example                     # Safe template for environment setup
-├── requirements.txt                 # All Python dependencies
-├── alembic.ini                      # Database migration config
+├── main.py                               # Entry point — tests DB, creates tables, launches GUI
+├── .env                                  # Secrets (never commit to Git)
+├── .env.example                          # Safe template for .env
+├── .gitignore                            # Excludes .env, venv/, __pycache__, data/
+├── requirements.txt                      # All Python dependencies
+├── alembic.ini                           # Database migration config
 ├── README.md
 │
 ├── app/
 │   ├── config/
 │   │   ├── __init__.py
-│   │   └── settings.py              # Central app settings (DB URL, API keys, constants)
+│   │   └── settings.py                   # Central config — reads .env, exposes all constants
 │   │
 │   ├── database/
 │   │   ├── __init__.py
-│   │   ├── connection.py            # SQLAlchemy engine + session factory
-│   │   ├── base.py                  # Declarative base for all models
-│   │   └── migrations/              # Alembic auto-generated migration versions
+│   │   ├── base.py                       # SQLAlchemy DeclarativeBase
+│   │   └── connection.py                 # Engine, SessionLocal, get_db(), test_connection()
 │   │
 │   ├── core/
 │   │   ├── models/
 │   │   │   ├── __init__.py
-│   │   │   ├── user.py              # System user / staff accounts
-│   │   │   ├── client.py            # Borrower / client profiles
-│   │   │   ├── loan.py              # Loan records and financial fields
-│   │   │   ├── repayment.py         # Payment transactions
-│   │   │   ├── collateral.py        # Collateral document attachments
-│   │   │   └── audit_log.py         # System-wide audit trail
+│   │   │   ├── user.py                   # users table — staff accounts
+│   │   │   ├── client.py                 # clients table — borrower profiles
+│   │   │   ├── loan.py                   # loans table — financial records
+│   │   │   ├── repayment.py              # repayments table — payment transactions
+│   │   │   ├── collateral.py             # collaterals table — document metadata
+│   │   │   └── audit_log.py              # audit_logs table — action history
 │   │   │
 │   │   ├── services/
 │   │   │   ├── __init__.py
-│   │   │   ├── auth_service.py      # Login, password hashing, session
-│   │   │   ├── client_service.py    # Client CRUD operations
-│   │   │   ├── loan_service.py      # Loan processing and interest calculation
-│   │   │   ├── repayment_service.py # Payment recording and balance tracking
-│   │   │   └── report_service.py    # PDF and Word report generation
+│   │   │   ├── auth_service.py           # Login, bcrypt hashing, user CRUD
+│   │   │   ├── client_service.py         # Client CRUD, NIN lookup, soft delete
+│   │   │   ├── loan_service.py           # Loan lifecycle, interest calc, stats
+│   │   │   ├── repayment_service.py      # Record payments, balance, auto-complete
+│   │   │   └── report_service.py         # PDF and Word report generation
 │   │   │
 │   │   └── agents/
 │   │       ├── __init__.py
-│   │       ├── ai_agent.py          # Anthropic-powered risk assessment agent
-│   │       └── chatbot.py           # Natural language chatbot interface
+│   │       ├── ai_agent.py               # Claude API — risk scoring, portfolio scan
+│   │       └── chatbot.py                # Claude API — RAG chatbot with live DB context
 │   │
 │   ├── ui/
 │   │   ├── __init__.py
-│   │   ├── app_root.py              # Root window and screen manager
+│   │   ├── app_root.py                   # Window manager, screen switcher, session state
 │   │   │
 │   │   ├── styles/
 │   │   │   ├── __init__.py
-│   │   │   └── theme.py             # Colors, fonts, and widget style presets
+│   │   │   └── theme.py                  # Brand colours, fonts, widget presets
 │   │   │
 │   │   ├── components/
 │   │   │   ├── __init__.py
-│   │   │   ├── sidebar.py           # Navigation sidebar
-│   │   │   ├── header.py            # Top header bar
-│   │   │   ├── data_table.py        # Reusable sortable data table
-│   │   │   ├── stat_card.py         # Dashboard KPI card
-│   │   │   ├── modal.py             # Reusable modal/dialog
-│   │   │   └── loading_spinner.py   # Async loading indicator
+│   │   │   ├── sidebar.py                # Navigation sidebar with logo
+│   │   │   ├── data_table.py             # Reusable scrollable table
+│   │   │   ├── stat_card.py              # Dashboard KPI card
+│   │   │   └── date_picker.py            # ★ Calendar popup date input widget
 │   │   │
 │   │   └── screens/
 │   │       ├── __init__.py
-│   │       ├── login_screen.py      # Authentication / sign-in
-│   │       ├── dashboard_screen.py  # Main overview dashboard
-│   │       ├── clients_screen.py    # Client management
-│   │       ├── loans_screen.py      # Loan management
-│   │       ├── repayments_screen.py # Repayment recording and history
-│   │       ├── reports_screen.py    # Report generation
-│   │       ├── agent_screen.py      # AI Risk Agent panel
-│   │       ├── chatbot_screen.py    # AI Chatbot interface
-│   │       └── settings_screen.py   # System settings and user management
+│   │       ├── login_screen.py           # Branded login — green panel + white form
+│   │       ├── dashboard_screen.py       # KPI cards, status overview, recent activity
+│   │       ├── clients_screen.py         # Register/edit borrowers
+│   │       ├── loans_screen.py           # Apply loans, collateral upload, date picker
+│   │       ├── repayments_screen.py      # Record payments, print A5 receipt
+│   │       ├── agent_screen.py           # AI risk scoring, portfolio scan
+│   │       ├── chatbot_screen.py         # Natural language chatbot interface
+│   │       ├── reports_screen.py         # Reports + loan agreement with signatures
+│   │       ├── users_screen.py           # ★ User management (Manager/Admin)
+│   │       ├── logs_screen.py            # ★ Activity audit log (Manager/Admin)
+│   │       └── settings_screen.py        # Change password, system info
 │   │
 │   └── utils/
-│       ├── __init__.py
-│       ├── validators.py            # Input validation helpers
-│       ├── formatters.py            # Currency, date, and number formatters
-│       └── file_manager.py          # Collateral file upload and access
+│       └── __init__.py
 │
 ├── assets/
-│   ├── images/
-│   │   └── logo.png                 # Application logo
-│   ├── icons/                       # UI icon assets
-│   └── fonts/                       # Custom fonts (if any)
+│   └── images/
+│       └── logo.png                      # Bingongold Credit logo
 │
-├── tests/
-│   ├── unit/
-│   │   ├── test_loan_service.py
-│   │   ├── test_repayment_service.py
-│   │   └── test_validators.py
-│   └── integration/
-│       ├── test_db_connection.py
-│       └── test_auth_flow.py
+├── scripts/
+│   └── create_admin.py                   # One-time admin account setup script
 │
-├── docs/
-│   ├── erd.png                      # Entity Relationship Diagram
-│   └── user_manual.md               # Staff user guide
-│
-└── scripts/
-    ├── seed_db.py                   # Populate database with sample/test data
-    └── create_admin.py              # One-time script to create the first admin account
+└── data/
+    └── collaterals/                      # Uploaded collateral files (auto-created)
 ```
+
+> Files marked ★ are new additions beyond the original design.
 
 ---
 
-## Database Schema (PostgreSQL)
+## Database Schema
 
-| Table | Description |
-|-------|-------------|
-| `users` | Staff accounts with roles (admin, manager, loan_officer) |
-| `clients` | Borrower profiles |
-| `loans` | Loan records linked to clients |
-| `repayments` | Payment transactions per loan |
-| `collaterals` | Document and image attachments per loan |
-| `audit_logs` | Full action history for every system event |
+| Table | Key Fields | Relationships |
+|-------|-----------|---------------|
+| `users` | id, username, password_hash, role, is_active | Referenced by loans, audit_logs |
+| `clients` | id, full_name, nin (unique), phone_number, is_active | One-to-many with loans |
+| `loans` | id, loan_number, client_id FK, status, principal_amount, risk_score, due_date | References clients and users; one-to-many with repayments and collaterals |
+| `repayments` | id, receipt_number, loan_id FK, amount, payment_date, payment_method | Many-to-one with loans |
+| `collaterals` | id, loan_id FK, description, file_path, file_type | Many-to-one with loans |
+| `audit_logs` | id, user_id FK, action, entity_type, entity_id, timestamp | References users |
+
+---
+
+## Application Screens
+
+| Screen | Access | Key Functionality |
+|--------|--------|------------------|
+| Login | Public | Branded login, bcrypt authentication |
+| Dashboard | All | KPI cards, loan status, recent repayments |
+| Clients | All | Register/edit/search borrowers |
+| Loans | All | Apply, approve, reject; collateral upload; date picker |
+| Repayments | All | Record payment with date picker; print receipt PDF |
+| AI Agent | Manager + Admin | Risk scoring, portfolio scan, overdue alerts |
+| AI Chatbot | Manager + Admin | Natural language portfolio queries |
+| Reports | Manager + Admin | 5 report types including loan agreement |
+| Users | Manager + Admin | Create, activate/deactivate, reset passwords |
+| Activity Logs | Manager + Admin | Filterable audit trail with PDF export |
+| Settings | All (admin extras) | Change password, create users, system info |
+
+---
+
+## Role Permissions
+
+| Feature | Loan Officer | Manager | Admin |
+|---------|-------------|---------|-------|
+| Login and dashboard | Yes | Yes | Yes |
+| Register clients | Yes | Yes | Yes |
+| Apply for loans | Yes | Yes | Yes |
+| Record repayments | Yes | Yes | Yes |
+| Print receipts | Yes | Yes | Yes |
+| Approve / reject loans | No | Yes | Yes |
+| AI Agent and Chatbot | No | Yes | Yes |
+| Generate reports | No | Yes | Yes |
+| Users management | No | Yes | Yes |
+| Activity logs | No | Yes | Yes |
+| Create system users | No | No | Yes |
 
 ---
 
@@ -170,119 +197,92 @@ AI-Based_LMS/
 - PostgreSQL 16+
 - pip
 
-### 1. Clone the repository
+### Steps
+
 ```bash
+# 1. Clone
 git clone https://github.com/Tamujacob/AI-Based-LMS.git
 cd AI-Based-LMS
-```
 
-### 2. Create and activate a virtual environment
-```bash
+# 2. Virtual environment
 python -m venv venv
+source venv/bin/activate       # Linux/Mac
 
-# Windows:
-venv\Scripts\activate
+# 3. Install tkinter (Ubuntu)
+sudo apt-get install python3-tk
 
-# Mac/Linux:
-source venv/bin/activate
-```
-
-### 3. Install dependencies
-```bash
+# 4. Install dependencies
 pip install -r requirements.txt
-```
 
-### 4. Configure environment variables
-```bash
-cp .env.example .env
-# Open .env and fill in your PostgreSQL credentials and Anthropic API key
-```
-
-### 5. Create the database
-```sql
--- In psql or pgAdmin:
+# 5. Create database (in psql or pgAdmin)
 CREATE DATABASE ailms_db;
-```
 
-### 6. Run database migrations
-```bash
-alembic upgrade head
-```
+# 6. Configure environment
+cp .env.example .env
+# Edit .env with your PostgreSQL password and Anthropic API key
 
-### 7. Create the first admin account
-```bash
+# 7. Create first admin account
 python scripts/create_admin.py
-```
 
-### 8. Launch the application
-```bash
+# 8. Launch
 python main.py
 ```
 
 ---
 
-## Default User Roles
+## Interest Calculation
 
-| Role | Permissions |
-|------|------------|
-| `admin` | Full system access, user management, all settings |
-| `manager` | All loan operations, reports, AI agent access |
-| `loan_officer` | Client registration, loan entry, repayment recording |
+Fixed rate: **10% flat** on principal.
+
+```
+Total Interest      = Principal × 10%
+Total Repayable     = Principal + Total Interest
+Monthly Instalment  = Total Repayable ÷ Duration (months)
+```
 
 ---
 
 ## AI Features
 
-### AI Risk Agent
-Powered by the **Anthropic Claude API**, the risk agent:
-- Analyses borrower history, loan amount, duration, and collateral
-- Returns a **LOW / MEDIUM / HIGH** risk rating with written reasoning
-- Scans the full portfolio for overdue and at-risk loans
-- Generates plain-English loan health summaries for quick review
+The AI features require an Anthropic API key from [console.anthropic.com](https://console.anthropic.com). Free-tier credits are sufficient for academic and demonstration use.
 
-### AI Chatbot
-A natural language interface built into the dashboard. Staff can type questions like:
-- *"Show me all overdue loans"*
-- *"How much has John Mukasa paid so far?"*
-- *"What is our total outstanding balance this month?"*
-- *"Which loans haven't had a payment in 60 days?"*
+**AI Risk Agent** — analyses loan and borrower data, returns LOW/MEDIUM/HIGH risk rating with written reasoning, scans the full portfolio, and generates collections alerts for overdue loans.
 
-Both AI features use the **Anthropic Claude API**. Free-tier credits from [console.anthropic.com](https://console.anthropic.com) are sufficient for academic and testing use.
+**AI Chatbot** — uses Retrieval Augmented Generation (RAG): pulls a live database snapshot before every response so answers are based on real current data.
 
 ---
 
-## Interest Calculation
+## Generated Documents
 
-Fixed rate: **10% flat** on principal (configurable in `.env`).
-
-```
-Total Interest      = Principal × 10%
-Total Repayable     = Principal + Total Interest
-Monthly Installment = Total Repayable ÷ Duration (months)
-```
+| Document | Format | Details |
+|---------|--------|---------|
+| Portfolio Summary | PDF + Word | All loans, status counts, totals |
+| Loan Agreement | PDF | Letterhead, terms, borrower/officer signatures, stamp box |
+| Overdue Loans Report | PDF | Past-due loans with client contacts |
+| Repayment History | PDF | All payments for auditing |
+| Client Register | PDF + Word | Full borrower list |
+| Repayment Receipt | PDF (A5) | Per-payment receipt with signature line |
+| Activity Log Report | PDF | Filtered audit trail |
 
 ---
 
 ## Case Study Institution
 
-This system was developed for and tested at:
-
-**Bingongold Credit**  
-4th Floor, Ham Tower, Wandegeya, Kampala, Uganda  
-*Established 2021 — providing Business, School Fees, Tax Clearance, Development, and Asset Acquisition loans.*
-
-The institution previously relied on a fully manual, paper-based system. This project digitises and automates their entire loan management workflow.
+**Bingongold Credit**
+4th Floor, Ham Tower, Wandegeya, Kampala, Uganda
+*Tagline: "together as one"*
+Established 2021 — providing Business, School Fees, Tax Clearance, Development, and Asset Acquisition loans at a fixed 10% interest rate.
 
 ---
 
 ## Author
 
-**Tamukedde Jacob** 
-Bachelor of Information Technology — Final Year Project  
+**Tamukedde Jacob** | 24/BIT/BU/R/0010
+Bachelor of Information Technology — Final Year Project
 Bugema University, Kampala, Uganda
 
-📧 jacobtamukedde@gmail.com  
-📞 +256 787 022 284  
+📧 jacobtamukedde@gmail.com
+📞 +256 787 022 284
 🔗 [github.com/Tamujacob](https://github.com/Tamujacob)
 
 ---
