@@ -14,10 +14,11 @@ class AppRoot(ctk.CTk):
         super().__init__()
 
         self.title(APP_NAME)
-        self.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}")
-        self.minsize(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)
         self.configure(fg_color=COLORS["bg_primary"])
-        self._center_window()
+
+        # Must call update_idletasks before reading screen dimensions
+        self.update_idletasks()
+        self._setup_window()
 
         self.current_user = None
         self.current_screen = None
@@ -26,24 +27,53 @@ class AppRoot(ctk.CTk):
 
         self.show_screen("login")
 
-    def _center_window(self):
-        self.update_idletasks()
+    def _setup_window(self):
+        """
+        Detect actual screen size at runtime and size the window to fit.
+        Works correctly on 768p laptops, 1080p desktops, and 4K monitors.
+        """
         sw = self.winfo_screenwidth()
         sh = self.winfo_screenheight()
 
-        # Dynamically calculate usable height (taskbar is ~50px on Ubuntu)
-        TASKBAR_RESERVE = 52
-        usable_h = sh - TASKBAR_RESERVE
+        # Detect DPI scaling (HiDPI / retina screens)
+        try:
+            scale = self.tk.call("tk", "scaling")
+            # Typical base scaling is 1.33 at 96dpi; anything above means HiDPI
+            dpi_factor = scale / 1.3333
+        except Exception:
+            dpi_factor = 1.0
 
-        win_w = min(WINDOW_WIDTH, sw)
-        win_h = min(WINDOW_HEIGHT, usable_h)
+        # Taskbar / dock reserve — varies by OS and screen height
+        if sh <= 768:
+            taskbar = 52   # small laptop, taskbar takes more % of screen
+        elif sh <= 900:
+            taskbar = 48
+        else:
+            taskbar = 44
 
-        self.minsize(WINDOW_MIN_WIDTH, min(WINDOW_MIN_HEIGHT, usable_h))
+        usable_w = sw
+        usable_h = sh - taskbar
 
+        # Window occupies 92% of usable space, capped at comfortable maximums
+        win_w = min(int(usable_w * 0.92), 1600)
+        win_h = min(int(usable_h * 0.96), 1050)
+
+        # Never go below minimum usable size
+        win_w = max(win_w, WINDOW_MIN_WIDTH)
+        win_h = max(win_h, WINDOW_MIN_HEIGHT)
+
+        self.minsize(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)
+        self.geometry(f"{win_w}x{win_h}")
+
+        # Centre on screen
         x = (sw - win_w) // 2
         y = max(0, (usable_h - win_h) // 2)
-
         self.geometry(f"{win_w}x{win_h}+{x}+{y}")
+
+        # Print detected config to console for debugging
+        print(f"[Window] Screen: {sw}x{sh}  |  "
+            f"Window: {win_w}x{win_h}  |  "
+            f"DPI scale: {dpi_factor:.2f}")
 
     def show_screen(self, screen_name: str, **kwargs):
         if self._transition_pending:
