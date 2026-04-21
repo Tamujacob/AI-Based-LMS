@@ -30,9 +30,20 @@ class AppRoot(ctk.CTk):
         self.update_idletasks()
         sw = self.winfo_screenwidth()
         sh = self.winfo_screenheight()
-        x = (sw - WINDOW_WIDTH) // 2
-        y = (sh - WINDOW_HEIGHT) // 2
-        self.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}+{x}+{y}")
+
+        # Dynamically calculate usable height (taskbar is ~50px on Ubuntu)
+        TASKBAR_RESERVE = 52
+        usable_h = sh - TASKBAR_RESERVE
+
+        win_w = min(WINDOW_WIDTH, sw)
+        win_h = min(WINDOW_HEIGHT, usable_h)
+
+        self.minsize(WINDOW_MIN_WIDTH, min(WINDOW_MIN_HEIGHT, usable_h))
+
+        x = (sw - win_w) // 2
+        y = max(0, (usable_h - win_h) // 2)
+
+        self.geometry(f"{win_w}x{win_h}+{x}+{y}")
 
     def show_screen(self, screen_name: str, **kwargs):
         if self._transition_pending:
