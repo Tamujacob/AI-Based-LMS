@@ -4,6 +4,13 @@ app/core/services/report_service.py
 PDF (ReportLab) and Word (python-docx) report generation.
 All reports are saved to ./reports/ and every generation
 is audit-logged under Actions.REPORT_GENERATED.
+
+Reports available:
+  - generate_loan_agreement      ← printable signed loan agreement per loan
+  - portfolio_summary_pdf / portfolio_summary_word
+  - overdue_report_pdf
+  - repayment_history_pdf
+  - client_register_pdf / client_register_word
 """
 
 import os
@@ -19,7 +26,7 @@ from reportlab.platypus import (
 )
 from reportlab.lib.units import cm
 from docx import Document
-from docx.shared import Pt, RGBColor, Inches
+from docx.shared import Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 from app.core.services.audit_service import AuditService, Actions
@@ -98,14 +105,13 @@ class ReportService:
     @staticmethod
     def _base_word(title: str) -> Document:
         doc = Document()
-        # Company header
-        h = doc.add_heading("BINGONGOLD CREDIT", 0)
+        h   = doc.add_heading("BINGONGOLD CREDIT", 0)
         h.runs[0].font.color.rgb = RGBColor(0x1A, 0x5C, 0x1E)
         h.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
         sub = doc.add_paragraph("together as one  |  Ham Tower, 4th Floor, Wandegeya, Kampala")
         sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        sub.runs[0].font.size = Pt(9)
+        sub.runs[0].font.size      = Pt(9)
         sub.runs[0].font.color.rgb = RGBColor(0x88, 0x88, 0x88)
 
         doc.add_heading(title, 1)
@@ -119,8 +125,164 @@ class ReportService:
         for i, h in enumerate(headers):
             row[i].text = h
             run = row[i].paragraphs[0].runs[0]
-            run.bold = True
-            run.font.color.rgb = RGBColor(0x1A, 0x5C, 0x1E)
+            run.bold                = True
+            run.font.color.rgb      = RGBColor(0x1A, 0x5C, 0x1E)
+
+    # ── Loan Agreement ─────────────────────────────────────────────────────────
+
+    @staticmethod
+    def generate_loan_agreement(loan, client, generated_by_id: int = None) -> str:
+        """
+        Generate a printable PDF loan agreement for a specific loan.
+        Called from the Loans screen Print Loan Agreement button.
+
+        Args:
+            loan:             Loan model instance.
+            client:           Client model instance.
+            generated_by_id:  ID of the user printing this (for audit log).
+        """
+        doc, _, path = ReportService._base_pdf(
+            f"loan_agreement_{loan.loan_number}.pdf")
+
+        elements = ReportService._header_elements("LOAN AGREEMENT")
+
+        # ── Paragraph styles ───────────────────────────────────────────────
+        intro_s = ParagraphStyle(
+            "intro", fontSize=10, textColor=colors.black,
+            spaceAfter=8, leading=16)
+        terms_title_s = ParagraphStyle(
+            "tt", fontSize=11, fontName="Helvetica-Bold",
+            textColor=GREEN, spaceAfter=6)
+        term_s = ParagraphStyle(
+            "ts", fontSize=9, textColor=colors.black,
+            spaceAfter=4, leading=14)
+        muted_s = ParagraphStyle(
+            "mt", fontSize=8, textColor=colors.grey,
+            spaceAfter=2, leading=12)
+
+        # ── Intro paragraph ────────────────────────────────────────────────
+        elements.append(Paragraph(
+            f"This Loan Agreement is entered into on <b>{date.today()}</b> between "
+            f"<b>Bingongold Credit</b>, Ham Tower, 4th Floor, Wandegeya, Kampala "
+            f"(the <b>Lender</b>) and the borrower named below (the <b>Borrower</b>).",
+            intro_s,
+        ))
+        elements.append(Spacer(1, 0.3*cm))
+
+        # ── Borrower & loan details table ──────────────────────────────────
+        client_name  = client.full_name    if client else "—"
+        client_nin   = client.nin          if client else "—"
+        client_phone = client.phone_number if client else "—"
+        client_addr  = getattr(client, "address", None) or "—"
+
+        tdata = [
+            ["BORROWER DETAILS", ""],
+            ["Full Name",     client_name],
+            ["NIN",           client_nin],
+            ["Phone",         client_phone],
+            ["Address",       client_addr],
+            ["", ""],
+            ["LOAN DETAILS",  ""],
+            ["Loan Number",   loan.loan_number],
+            ["Loan Type",     loan.loan_type.value if loan.loan_type else "—"],
+            ["Principal",     f"UGX {float(loan.principal_amount):,.0f}"],
+            ["Interest (10%)",
+             f"UGX {float(loan.total_interest):,.0f}"      if loan.total_interest      else "—"],
+            ["Total Repayable",
+             f"UGX {float(loan.total_repayable):,.0f}"     if loan.total_repayable     else "—"],
+            ["Monthly Installment",
+             f"UGX {float(loan.monthly_installment):,.0f}" if loan.monthly_installment else "—"],
+            ["Duration",         f"{loan.duration_months} months"],
+            ["Purpose",          loan.purpose or "—"],
+            ["Application Date", str(loan.application_date) if loan.application_date else "—"],
+        ]
+
+        t = Table(tdata, colWidths=[6*cm, 11*cm])
+        t.setStyle(TableStyle([
+            # Borrower header row
+            ("BACKGROUND",    (0, 0),  (-1, 0),  GREEN),
+            ("TEXTCOLOR",     (0, 0),  (-1, 0),  colors.white),
+            ("FONTNAME",      (0, 0),  (-1, 0),  "Helvetica-Bold"),
+            ("SPAN",          (0, 0),  (-1, 0)),
+            # Loan header row
+            ("BACKGROUND",    (0, 6),  (-1, 6),  GREEN),
+            ("TEXTCOLOR",     (0, 6),  (-1, 6),  colors.white),
+            ("FONTNAME",      (0, 6),  (-1, 6),  "Helvetica-Bold"),
+            ("SPAN",          (0, 6),  (-1, 6)),
+            # Label column bold
+            ("FONTNAME",      (0, 1),  (0, 5),   "Helvetica-Bold"),
+            ("FONTNAME",      (0, 7),  (0, -1),  "Helvetica-Bold"),
+            # Alternating row backgrounds
+            ("ROWBACKGROUNDS",(0, 1),  (-1, 5),  [LIGHT_GREY, colors.white]),
+            ("ROWBACKGROUNDS",(0, 7),  (-1, -1), [LIGHT_GREY, colors.white]),
+            # Global
+            ("FONTSIZE",      (0, 0),  (-1, -1), 10),
+            ("TOPPADDING",    (0, 0),  (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0),  (-1, -1), 5),
+            ("LEFTPADDING",   (0, 0),  (-1, -1), 8),
+            ("GRID",          (0, 0),  (-1, -1), 0.25, colors.lightgrey),
+        ]))
+        elements.append(t)
+        elements.append(Spacer(1, 0.8*cm))
+
+        # ── Terms and conditions ───────────────────────────────────────────
+        elements.append(Paragraph("TERMS AND CONDITIONS", terms_title_s))
+        for term in [
+            "1. The Borrower agrees to repay the full amount as per the repayment schedule above.",
+            "2. Interest is charged at a flat rate of 10% on the principal amount.",
+            "3. Payments must be made on or before the agreed due date each month.",
+            "4. Late payments may attract a penalty as determined by Bingongold Credit.",
+            "5. The Borrower confirms that all information provided is true and accurate.",
+            "6. Any collateral pledged remains under the Lender's charge until full repayment.",
+            "7. The Lender reserves the right to pursue legal action in the event of default.",
+            "8. This agreement is governed by the laws of the Republic of Uganda.",
+            "9. Any disputes shall be resolved through courts of competent jurisdiction in Kampala.",
+        ]:
+            elements.append(Paragraph(term, term_s))
+
+        elements.append(Spacer(1, 1*cm))
+
+        # ── Signature block ────────────────────────────────────────────────
+        sig_data = [
+            [Paragraph("<b>Borrower Signature:</b>", term_s),
+             Paragraph("", term_s),
+             Paragraph("<b>Authorised Officer:</b>", term_s)],
+            [Paragraph("_______________________", term_s),
+             Paragraph("", term_s),
+             Paragraph("_______________________", term_s)],
+            [Paragraph(client_name, term_s),
+             Paragraph("", term_s),
+             Paragraph("Bingongold Credit", term_s)],
+            [Paragraph("Date: _______________", term_s),
+             Paragraph("", term_s),
+             Paragraph(f"Date: {date.today()}", term_s)],
+        ]
+        sig_t = Table(sig_data, colWidths=[7*cm, 3*cm, 7*cm])
+        sig_t.setStyle(TableStyle([
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("ALIGN",      (2, 0), (2, -1),  "RIGHT"),
+        ]))
+        elements.append(sig_t)
+        elements.append(Spacer(1, 0.5*cm))
+        elements.append(Paragraph(
+            "This document is computer-generated and is valid without a physical stamp "
+            "when signed by both parties.",
+            muted_s,
+        ))
+        elements.extend(ReportService._footer_elements(1, "Loan Agreement"))
+
+        doc.build(elements)
+
+        AuditService.log(
+            action      = Actions.REPORT_GENERATED,
+            user_id     = generated_by_id,
+            entity_type = "Report",
+            description = (
+                f"Loan Agreement generated: {loan.loan_number} "
+                f"| Client: {client_name}"
+            ),
+        )
+        return path
 
     # ── Portfolio Summary ──────────────────────────────────────────────────────
 
@@ -138,9 +300,8 @@ class ReportService:
         total   = LoanService.total_portfolio_value()
         clients = ClientService.count_clients()
 
-        # Summary stats table
         summary_data = [
-            ["Metric",                "Value"],
+            ["Metric",                   "Value"],
             ["Total Registered Clients", str(clients)],
             ["Total Active Portfolio",   f"UGX {float(total):,.0f}"],
             ["Pending Loans",            str(counts.get("pending",   0))],
@@ -153,7 +314,6 @@ class ReportService:
         t.setStyle(ReportService._table_style())
         elements.extend([t, Spacer(1, 0.6*cm)])
 
-        # Loan details table
         loans     = LoanService.get_all_loans()
         loan_data = [["Loan No.", "Client", "Type", "Principal (UGX)", "Status", "Due Date"]]
         for loan in loans:
@@ -200,11 +360,11 @@ class ReportService:
 
         doc.add_heading("Summary Statistics", 2)
         stats = [
-            ("Total Clients",    str(clients)),
-            ("Total Portfolio",  f"UGX {float(total):,.0f}"),
-            ("Active Loans",     str(counts.get("active",    0))),
-            ("Completed Loans",  str(counts.get("completed", 0))),
-            ("Defaulted Loans",  str(counts.get("defaulted", 0))),
+            ("Total Clients",   str(clients)),
+            ("Total Portfolio", f"UGX {float(total):,.0f}"),
+            ("Active Loans",    str(counts.get("active",    0))),
+            ("Completed Loans", str(counts.get("completed", 0))),
+            ("Defaulted Loans", str(counts.get("defaulted", 0))),
         ]
         tbl = doc.add_table(rows=1, cols=2)
         tbl.style = "Table Grid"
@@ -259,7 +419,7 @@ class ReportService:
         overdue = LoanService.get_overdue_loans()
         if not overdue:
             elements.append(Paragraph(
-                "✔  No overdue loans as of today.", styles["Normal"]))
+                "No overdue loans as of today.", styles["Normal"]))
         else:
             data = [["Loan No.", "Client", "Phone", "Principal (UGX)", "Due Date", "Days Overdue"]]
             for loan in overdue:
@@ -284,10 +444,7 @@ class ReportService:
             action      = Actions.REPORT_GENERATED,
             user_id     = generated_by_id,
             entity_type = "Report",
-            description = (
-                f"Overdue Loans PDF generated | "
-                f"Overdue count: {len(overdue)}"
-            ),
+            description = f"Overdue Loans PDF generated | Overdue count: {len(overdue)}",
         )
         return path
 
@@ -329,10 +486,7 @@ class ReportService:
             action      = Actions.REPORT_GENERATED,
             user_id     = generated_by_id,
             entity_type = "Report",
-            description = (
-                f"Repayment History PDF generated | "
-                f"Records: {len(repayments)}"
-            ),
+            description = f"Repayment History PDF generated | Records: {len(repayments)}",
         )
         return path
 
