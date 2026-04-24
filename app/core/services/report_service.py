@@ -6,7 +6,7 @@ All reports are saved to ./reports/ and every generation
 is audit-logged under Actions.REPORT_GENERATED.
 
 Reports available:
-  - generate_loan_agreement      ← printable signed loan agreement per loan
+  - generate_loan_agreement      ← loan agreement with collateral images
   - portfolio_summary_pdf / portfolio_summary_word
   - overdue_report_pdf
   - repayment_history_pdf
@@ -23,10 +23,12 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import (
     SimpleDocTemplate, Table, TableStyle,
     Paragraph, Spacer, HRFlowable,
+    Image as RLImage,
 )
 from reportlab.lib.units import cm
+from reportlab.lib.utils import ImageReader
 from docx import Document
-from docx.shared import Pt, RGBColor
+from docx.shared import Pt, RGBColor, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 from app.core.services.audit_service import AuditService, Actions
@@ -39,6 +41,9 @@ GREEN      = colors.HexColor("#1A5C1E")
 GOLD       = colors.HexColor("#D4A017")
 LIGHT_GREY = colors.HexColor("#F0F7F0")
 NAVY       = colors.HexColor("#0D1B2A")
+
+# Supported image extensions that can be rendered inline in PDF
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff"}
 
 
 class ReportService:
@@ -65,7 +70,8 @@ class ReportService:
             "Sub", fontSize=10, textColor=colors.grey, spaceAfter=12)
         return [
             Paragraph("BINGONGOLD CREDIT", h1),
-            Paragraph("together as one  |  Ham Tower, 4th Floor, Wandegeya, Kampala", sub),
+            Paragraph(
+                "together as one  |  Ham Tower, 4th Floor, Wandegeya, Kampala", sub),
             Paragraph(f"{title}  —  Generated: {date.today()}", sub),
             HRFlowable(width="100%", thickness=2, color=GREEN, spaceAfter=12),
         ]
@@ -89,7 +95,8 @@ class ReportService:
     @staticmethod
     def _footer_elements(row_count: int, report_name: str) -> list:
         foot = ParagraphStyle(
-            "foot", fontSize=8, textColor=colors.grey, alignment=1, spaceBefore=8)
+            "foot", fontSize=8, textColor=colors.grey,
+            alignment=1, spaceBefore=8)
         return [
             Spacer(1, 0.4*cm),
             HRFlowable(width="100%", thickness=1, color=GREEN),
@@ -109,7 +116,8 @@ class ReportService:
         h.runs[0].font.color.rgb = RGBColor(0x1A, 0x5C, 0x1E)
         h.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
-        sub = doc.add_paragraph("together as one  |  Ham Tower, 4th Floor, Wandegeya, Kampala")
+        sub = doc.add_paragraph(
+            "together as one  |  Ham Tower, 4th Floor, Wandegeya, Kampala")
         sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
         sub.runs[0].font.size      = Pt(9)
         sub.runs[0].font.color.rgb = RGBColor(0x88, 0x88, 0x88)
@@ -128,13 +136,81 @@ class ReportService:
             run.bold                = True
             run.font.color.rgb      = RGBColor(0x1A, 0x5C, 0x1E)
 
+    # ── Internal: render one collateral item into PDF elements ─────────────────
+
+    @staticmethod
+    def _collateral_elements(coll_data: list, term_s, muted_s) -> list:
+        """
+        Build a list of ReportLab flowables for all collateral documents.
+
+        Args:
+            coll_data:  List of (description, file_path, file_name) tuples.
+            term_s:     ParagraphStyle for body text.
+            muted_s:    ParagraphStyle for muted/caption text.
+        """
+        elements = []
+
+        if not coll_data:
+            elements.append(Paragraph(
+                "No collateral documents were attached to this loan.", muted_s))
+            return elements
+
+        for idx, (desc, fpath, fname) in enumerate(coll_data, 1):
+            ext = os.path.splitext(fpath)[1].lower()
+
+            # Document label
+            elements.append(Paragraph(
+                f"<b>Document {idx}:</b>  {desc}  <font color='grey'>({fname})</font>",
+                term_s,
+            ))
+
+            if ext in IMAGE_EXTS:
+                if os.path.exists(fpath):
+                    try:
+                        # Read actual image dimensions and scale to fit page
+                        reader  = ImageReader(fpath)
+                        iw, ih  = reader.getSize()
+                        max_w   = 14 * cm
+                        max_h   = 9  * cm
+                        ratio   = min(max_w / iw, max_h / ih, 1.0)
+                        draw_w  = iw * ratio
+                        draw_h  = ih * ratio
+
+                        img = RLImage(fpath, width=draw_w, height=draw_h)
+                        elements.append(Spacer(1, 0.2*cm))
+                        elements.append(img)
+                        elements.append(Paragraph(
+                            f"{desc} — {fname}", muted_s))
+                    except Exception as e:
+                        elements.append(Paragraph(
+                            f"[Image could not be rendered: {e}]", muted_s))
+                else:
+                    elements.append(Paragraph(
+                        f"[Image file not found on disk: {fpath}]", muted_s))
+
+            elif ext == ".pdf":
+                elements.append(Paragraph(
+                    f"[PDF document — printed separately: {fname}]", muted_s))
+
+            else:
+                elements.append(Paragraph(
+                    f"[Document type {ext or 'unknown'}: {fname}]", muted_s))
+
+            elements.append(Spacer(1, 0.5*cm))
+
+        return elements
+
     # ── Loan Agreement ─────────────────────────────────────────────────────────
 
     @staticmethod
     def generate_loan_agreement(loan, client, generated_by_id: int = None) -> str:
         """
-        Generate a printable PDF loan agreement for a specific loan.
-        Called from the Loans screen Print Loan Agreement button.
+        Generate a printable PDF loan agreement including:
+        - Borrower details
+        - Full loan financial breakdown
+        - Terms and conditions
+        - Signature block
+        - All collateral documents (images rendered inline)
 
         Args:
             loan:             Loan model instance.
@@ -150,9 +226,9 @@ class ReportService:
         intro_s = ParagraphStyle(
             "intro", fontSize=10, textColor=colors.black,
             spaceAfter=8, leading=16)
-        terms_title_s = ParagraphStyle(
-            "tt", fontSize=11, fontName="Helvetica-Bold",
-            textColor=GREEN, spaceAfter=6)
+        section_s = ParagraphStyle(
+            "sec", fontSize=11, fontName="Helvetica-Bold",
+            textColor=GREEN, spaceAfter=6, spaceBefore=4)
         term_s = ParagraphStyle(
             "ts", fontSize=9, textColor=colors.black,
             spaceAfter=4, leading=14)
@@ -199,23 +275,18 @@ class ReportService:
 
         t = Table(tdata, colWidths=[6*cm, 11*cm])
         t.setStyle(TableStyle([
-            # Borrower header row
             ("BACKGROUND",    (0, 0),  (-1, 0),  GREEN),
             ("TEXTCOLOR",     (0, 0),  (-1, 0),  colors.white),
             ("FONTNAME",      (0, 0),  (-1, 0),  "Helvetica-Bold"),
             ("SPAN",          (0, 0),  (-1, 0)),
-            # Loan header row
             ("BACKGROUND",    (0, 6),  (-1, 6),  GREEN),
             ("TEXTCOLOR",     (0, 6),  (-1, 6),  colors.white),
             ("FONTNAME",      (0, 6),  (-1, 6),  "Helvetica-Bold"),
             ("SPAN",          (0, 6),  (-1, 6)),
-            # Label column bold
             ("FONTNAME",      (0, 1),  (0, 5),   "Helvetica-Bold"),
             ("FONTNAME",      (0, 7),  (0, -1),  "Helvetica-Bold"),
-            # Alternating row backgrounds
             ("ROWBACKGROUNDS",(0, 1),  (-1, 5),  [LIGHT_GREY, colors.white]),
             ("ROWBACKGROUNDS",(0, 7),  (-1, -1), [LIGHT_GREY, colors.white]),
-            # Global
             ("FONTSIZE",      (0, 0),  (-1, -1), 10),
             ("TOPPADDING",    (0, 0),  (-1, -1), 5),
             ("BOTTOMPADDING", (0, 0),  (-1, -1), 5),
@@ -226,7 +297,7 @@ class ReportService:
         elements.append(Spacer(1, 0.8*cm))
 
         # ── Terms and conditions ───────────────────────────────────────────
-        elements.append(Paragraph("TERMS AND CONDITIONS", terms_title_s))
+        elements.append(Paragraph("TERMS AND CONDITIONS", section_s))
         for term in [
             "1. The Borrower agrees to repay the full amount as per the repayment schedule above.",
             "2. Interest is charged at a flat rate of 10% on the principal amount.",
@@ -269,6 +340,41 @@ class ReportService:
             "when signed by both parties.",
             muted_s,
         ))
+
+        # ── Collateral documents ───────────────────────────────────────────
+        elements.append(Spacer(1, 0.6*cm))
+        elements.append(HRFlowable(width="100%", thickness=1.5, color=GREEN, spaceAfter=8))
+        elements.append(Paragraph("COLLATERAL DOCUMENTS", section_s))
+        elements.append(Paragraph(
+            "The following documents have been submitted as collateral security for this loan.",
+            muted_s,
+        ))
+        elements.append(Spacer(1, 0.3*cm))
+
+        # Load collateral records from DB
+        try:
+            from app.database.connection import get_db
+            from app.core.models.collateral import Collateral
+
+            with get_db() as db:
+                collaterals = (
+                    db.query(Collateral)
+                    .filter_by(loan_id=loan.id)
+                    .order_by(Collateral.created_at)
+                    .all()
+                )
+                coll_data = [
+                    (c.description, c.file_path, c.file_name)
+                    for c in collaterals
+                ]
+        except Exception as e:
+            coll_data = []
+            elements.append(Paragraph(
+                f"[Could not load collateral records: {e}]", muted_s))
+
+        elements.extend(
+            ReportService._collateral_elements(coll_data, term_s, muted_s))
+
         elements.extend(ReportService._footer_elements(1, "Loan Agreement"))
 
         doc.build(elements)
@@ -279,7 +385,8 @@ class ReportService:
             entity_type = "Report",
             description = (
                 f"Loan Agreement generated: {loan.loan_number} "
-                f"| Client: {client_name}"
+                f"| Client: {client_name} "
+                f"| Collateral items: {len(coll_data)}"
             ),
         )
         return path
@@ -436,7 +543,8 @@ class ReportService:
             t = Table(data, colWidths=[3*cm, 4*cm, 3*cm, 3.5*cm, 3*cm, 2.5*cm])
             t.setStyle(ReportService._table_style())
             elements.append(t)
-            elements.extend(ReportService._footer_elements(len(overdue), "Overdue Loans"))
+            elements.extend(
+                ReportService._footer_elements(len(overdue), "Overdue Loans"))
 
         doc.build(elements)
 
