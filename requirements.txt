@@ -1,26 +1,37 @@
-# Core
+# ── Core UI ──────────────────────────────────────────────────────────────────
 customtkinter==5.2.2
-Pillow==10.4.0
+Pillow>=10.0.0
+tkcalendar>=1.6.1
 
-# Database
-psycopg2-binary==2.9.9
-SQLAlchemy==2.0.36
-alembic==1.14.0
+# ── Database ──────────────────────────────────────────────────────────────────
+SQLAlchemy>=2.0.0
+psycopg2-binary>=2.9.0
+alembic>=1.14.0
 
-# AI / LLM
-anthropic==0.40.0
+# ── Security ──────────────────────────────────────────────────────────────────
+bcrypt>=4.2.0
 
-# ML
-scikit-learn==1.5.2
-numpy==1.26.4
-pandas==2.2.3
-joblib==1.4.2
+# ── Reports ───────────────────────────────────────────────────────────────────
+reportlab>=4.2.0
+python-docx>=1.1.0
 
-# Reports
-reportlab==4.2.5
-python-docx==1.1.2
+# ── Configuration ─────────────────────────────────────────────────────────────
+python-dotenv>=1.0.0
 
-# Utilities
-python-dotenv==1.0.1
-bcrypt==4.2.1
-Pillow==10.4.0
+# ── AI — Online (optional, chatbot only) ──────────────────────────────────────
+anthropic>=0.40.0
+
+# ── AI — Offline (local risk model, always works) ─────────────────────────────
+scikit-learn>=1.4.0
+joblib>=1.3.0
+numpy>=1.26.0
+pandas>=2.0.0
+
+# ── Statement parsing ─────────────────────────────────────────────────────────
+pdfplumber>=0.11.0
+python-dateutil>=2.9.0
+
+# ── Statement parsing — image/screenshot (optional) ───────────────────────────
+# Uncomment if you want OCR support for statement screenshots:
+# pytesseract>=0.3.10
+# Pillow is already above
