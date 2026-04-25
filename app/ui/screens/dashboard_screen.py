@@ -1,9 +1,10 @@
 """
 app/ui/screens/dashboard_screen.py
 ────────────────────────────────────
-Dashboard with clickable loan status cards.
-Clicking a status card navigates to the Loans screen
-filtered to that status.
+Dashboard screen with:
+- Top stat cards (portfolio, active loans, overdue, clients)
+- Clickable loan status cards that expand an inline filtered loan list
+- Recent repayments feed
 """
 
 import customtkinter as ctk
@@ -12,9 +13,9 @@ from app.ui.components.sidebar import Sidebar
 from app.ui.components.stat_card import StatCard
 
 
-# Status card colour definitions — each has a background, text, and hover colour
+# (key, label, accent_color, bg_color, hover_color)
 STATUS_CONFIG = [
-    ("pending",   "Pending",   "#F39C12", "#FEF9E7", "#F0A500"),
+    ("pending",   "Pending",   "#F39C12", "#FEF9E7", "#E67E22"),
     ("approved",  "Approved",  "#2980B9", "#EBF5FB", "#2471A3"),
     ("active",    "Active",    "#27AE60", "#EAFAF1", "#1E8449"),
     ("completed", "Completed", "#7F8C8D", "#F2F3F4", "#707B7C"),
@@ -25,8 +26,10 @@ STATUS_CONFIG = [
 class DashboardScreen(ctk.CTkFrame):
     def __init__(self, master, **kwargs):
         super().__init__(master, fg_color=COLORS["bg_primary"], **kwargs)
-        self.master       = master
-        self.current_user = master.current_user
+        self.master         = master
+        self.current_user   = master.current_user
+        self._active_status = None   # tracks which status card is expanded
+        self._loans_panel   = None   # reference to the inline loans panel
         self._build()
         self._load_stats()
 
@@ -55,10 +58,11 @@ class DashboardScreen(ctk.CTkFrame):
         self.content.grid(row=0, column=1, sticky="nsew")
         self.content.columnconfigure(0, weight=1)
 
-        self._build_header()
-        self._build_stat_cards()
-        self._build_loan_status_row()
-        self._build_recent_activity()
+        self._build_header()          # row 0–1
+        self._build_stat_cards()      # row 2
+        self._build_loan_status_row() # row 3–4
+        # row 5 = inline loans panel (dynamically added)
+        self._build_recent_activity() # row 6–7
 
     # ── Header ─────────────────────────────────────────────────────────────────
 
@@ -125,7 +129,7 @@ class DashboardScreen(ctk.CTkFrame):
             "Loading...", accent=COLORS["accent_gold"])
         self.card_clients.grid(row=0, column=3, padx=(8, 0), sticky="ew")
 
-    # ── Loan status overview (clickable) ───────────────────────────────────────
+    # ── Loan status overview ───────────────────────────────────────────────────
 
     def _build_loan_status_row(self):
         # Section header
@@ -142,39 +146,34 @@ class DashboardScreen(ctk.CTkFrame):
 
         ctk.CTkLabel(
             hdr_row,
-            text="Click a card to view those loans",
+            text="Click a card to view those loans ↓",
             font=FONTS["body_small"],
             text_color=COLORS["text_muted"],
             anchor="e",
         ).grid(row=0, column=1, sticky="e")
 
-        # Status cards grid
+        # Cards row
         self.status_frame = ctk.CTkFrame(self.content, fg_color="transparent")
         self.status_frame.grid(row=4, column=0, sticky="ew", padx=28)
         for i in range(5):
             self.status_frame.columnconfigure(i, weight=1)
 
         self.status_labels = {}
-        self._status_cards  = {}
+        self._status_cards = {}
 
         for i, (key, label, color, bg_color, hover_color) in enumerate(STATUS_CONFIG):
             self._build_status_card(
-                parent      = self.status_frame,
-                col         = i,
-                key         = key,
-                label       = label,
-                color       = color,
-                bg_color    = bg_color,
-                hover_color = hover_color,
+                col        = i,
+                key        = key,
+                label      = label,
+                color      = color,
+                bg_color   = bg_color,
+                hover_color= hover_color,
             )
 
-    def _build_status_card(self, parent, col: int, key: str, label: str,
-                           color: str, bg_color: str, hover_color: str):
-        """Build a single clickable status card."""
-
-        # Outer card frame
+    def _build_status_card(self, col, key, label, color, bg_color, hover_color):
         card = ctk.CTkFrame(
-            parent,
+            self.status_frame,
             fg_color=bg_color,
             corner_radius=12,
             border_width=2,
@@ -187,22 +186,21 @@ class DashboardScreen(ctk.CTkFrame):
         ctk.CTkFrame(card, fg_color=color, height=5,
                      corner_radius=0).pack(fill="x")
 
-        # Arrow hint (top right)
-        arrow = ctk.CTkLabel(
-            card, text="→",
-            font=("Helvetica", 11),
+        # Arrow hint
+        ctk.CTkLabel(
+            card, text="↓",
+            font=("Helvetica", 11, "bold"),
             text_color=color,
             anchor="e",
-        )
-        arrow.pack(fill="x", padx=(0, 10), pady=(4, 0))
+        ).pack(fill="x", padx=(0, 10), pady=(4, 0))
 
-        # Status label
+        # Status name
         ctk.CTkLabel(
             card, text=label,
             font=FONTS["body_small"],
             text_color="#555555",
             anchor="center",
-        ).pack(pady=(2, 0))
+        ).pack(pady=(0, 2))
 
         # Count
         count_lbl = ctk.CTkLabel(
@@ -211,43 +209,222 @@ class DashboardScreen(ctk.CTkFrame):
             text_color=color,
             anchor="center",
         )
-        count_lbl.pack(pady=(2, 4))
+        count_lbl.pack()
 
-        # "View loans" hint label
-        hint = ctk.CTkLabel(
-            card,
-            text="View loans",
+        # Hint
+        ctk.CTkLabel(
+            card, text="tap to view",
             font=FONTS["caption"],
             text_color=color,
             anchor="center",
-        )
-        hint.pack(pady=(0, 10))
+        ).pack(pady=(2, 10))
 
-        self.status_labels[key]  = count_lbl
-        self._status_cards[key]  = card
+        self.status_labels[key] = count_lbl
+        self._status_cards[key] = (card, color, bg_color)
 
-        # ── Hover and click bindings ───────────────────────────────────────
-        def on_enter(_e, c=card, col=color, hov=hover_color):
-            c.configure(fg_color=hov, border_color=hov)
+        # Bindings
+        def on_enter(_e):
+            if self._active_status != key:
+                card.configure(fg_color=hover_color)
 
-        def on_leave(_e, c=card, bg=bg_color, col=color):
-            c.configure(fg_color=bg, border_color=col)
+        def on_leave(_e):
+            if self._active_status != key:
+                card.configure(fg_color=bg_color)
 
-        def on_click(_e, k=key):
-            self._navigate_to_loans(k)
+        def on_click(_e):
+            self._toggle_loans_panel(key)
 
-        for widget in card.winfo_children() + [card]:
+        for widget in [card] + card.winfo_children():
             widget.bind("<Enter>",    on_enter)
             widget.bind("<Leave>",    on_leave)
             widget.bind("<Button-1>", on_click)
 
-    def _navigate_to_loans(self, status: str):
-        """Navigate to Loans screen — future enhancement can pre-filter by status."""
-        # Show loans screen — the status filter can be pre-set if loans_screen
-        # supports a status kwarg; for now it navigates and the user filters.
-        self.master.show_screen("loans")
+    # ── Inline loans panel ─────────────────────────────────────────────────────
 
-    # ── Recent activity ────────────────────────────────────────────────────────
+    def _toggle_loans_panel(self, status: str):
+        """Toggle the inline loans panel for the clicked status."""
+        if self._active_status == status:
+            # Same card clicked — collapse
+            self._active_status = None
+            self._hide_loans_panel()
+            self._reset_card_styles()
+            return
+
+        self._active_status = status
+        self._reset_card_styles()
+        self._highlight_active_card(status)
+        self._show_loans_panel(status)
+
+    def _reset_card_styles(self):
+        for key, (card, color, bg_color) in self._status_cards.items():
+            card.configure(fg_color=bg_color, border_width=2,
+                           border_color=color)
+
+    def _highlight_active_card(self, status: str):
+        card, color, _ = self._status_cards[status]
+        card.configure(border_width=4, border_color=color,
+                       fg_color=color)
+        # Flip text colours on the active card
+        for child in card.winfo_children():
+            try:
+                child.configure(text_color="#FFFFFF")
+            except Exception:
+                pass
+
+    def _hide_loans_panel(self):
+        if self._loans_panel and self._loans_panel.winfo_exists():
+            self._loans_panel.destroy()
+        self._loans_panel = None
+
+    def _show_loans_panel(self, status: str):
+        self._hide_loans_panel()
+
+        cfg   = next(c for c in STATUS_CONFIG if c[0] == status)
+        color = cfg[2]
+        label = cfg[1]
+
+        # Panel container
+        self._loans_panel = ctk.CTkFrame(
+            self.content,
+            fg_color=COLORS["bg_card"],
+            corner_radius=12,
+            border_width=2,
+            border_color=color,
+        )
+        self._loans_panel.grid(row=5, column=0, sticky="ew",
+                                padx=28, pady=(10, 0))
+        self._loans_panel.columnconfigure(0, weight=1)
+
+        # Panel header bar
+        hdr = ctk.CTkFrame(self._loans_panel, fg_color=color,
+                            corner_radius=0, height=42)
+        hdr.pack(fill="x")
+        hdr.pack_propagate(False)
+
+        ctk.CTkLabel(
+            hdr, text=f"  {label} Loans",
+            font=FONTS["subheading"],
+            text_color="#FFFFFF",
+        ).pack(side="left", padx=16, fill="y")
+
+        ctk.CTkButton(
+            hdr, text="✕  Close",
+            width=80, height=28,
+            fg_color="transparent",
+            hover_color="#00000033",
+            border_width=1,
+            border_color="#FFFFFF",
+            text_color="#FFFFFF",
+            font=FONTS["caption"],
+            corner_radius=6,
+            command=lambda: self._toggle_loans_panel(status),
+        ).pack(side="right", padx=12, pady=7)
+
+        # Load loans
+        try:
+            from app.core.services.loan_service import LoanService
+            from app.core.services.client_service import ClientService
+
+            loans = LoanService.get_all_loans(status=status)
+
+            if not loans:
+                ctk.CTkLabel(
+                    self._loans_panel,
+                    text=f"No {label.lower()} loans found.",
+                    font=FONTS["body"],
+                    text_color=COLORS["text_muted"],
+                ).pack(pady=24)
+                return
+
+            # Column header row
+            col_hdr = ctk.CTkFrame(
+                self._loans_panel,
+                fg_color=COLORS["bg_input"],
+                height=32,
+            )
+            col_hdr.pack(fill="x")
+            col_hdr.pack_propagate(False)
+
+            columns = [
+                ("Loan No.",   130),
+                ("Client",     190),
+                ("Type",       150),
+                ("Principal",  130),
+                ("Due Date",   110),
+            ]
+            for i, (col_label, width) in enumerate(columns):
+                ctk.CTkLabel(
+                    col_hdr,
+                    text=col_label,
+                    font=FONTS["badge"],
+                    text_color=COLORS["text_muted"],
+                    width=width,
+                    anchor="w",
+                ).pack(side="left",
+                       padx=(16 if i == 0 else 0, 0))
+
+            # Loan rows — cap display at 10
+            display_loans = loans[:10]
+            for i, loan in enumerate(display_loans):
+                client = ClientService.get_client_by_id(loan.client_id)
+                bg     = (COLORS["bg_card"] if i % 2 == 0
+                          else COLORS["bg_input"])
+                row    = ctk.CTkFrame(self._loans_panel,
+                                      fg_color=bg, height=36)
+                row.pack(fill="x")
+                row.pack_propagate(False)
+
+                values = [
+                    (loan.loan_number,                                  130),
+                    (client.full_name if client else "—",               190),
+                    (loan.loan_type.value if loan.loan_type else "—",   150),
+                    (f"UGX {float(loan.principal_amount):,.0f}",        130),
+                    (str(loan.due_date) if loan.due_date else "—",      110),
+                ]
+                for j, (val, width) in enumerate(values):
+                    ctk.CTkLabel(
+                        row,
+                        text=val,
+                        font=FONTS["body_small"],
+                        text_color=COLORS["text_primary"],
+                        width=width,
+                        anchor="w",
+                    ).pack(side="left",
+                           padx=(16 if j == 0 else 0, 0))
+
+            # "More" notice
+            if len(loans) > 10:
+                ctk.CTkLabel(
+                    self._loans_panel,
+                    text=f"  … showing 10 of {len(loans)}. "
+                         f"Go to the Loans screen to see all.",
+                    font=FONTS["body_small"],
+                    text_color=COLORS["text_muted"],
+                    anchor="w",
+                ).pack(fill="x", padx=16, pady=(6, 0))
+
+            # Footer button — go to full Loans screen
+            ctk.CTkButton(
+                self._loans_panel,
+                text=f"View all {len(loans)} {label.lower()} loans  →",
+                height=38,
+                font=FONTS["button"],
+                fg_color=color,
+                hover_color=cfg[4],
+                text_color="#FFFFFF",
+                corner_radius=0,
+                command=lambda: self._navigate("loans"),
+            ).pack(fill="x", pady=(8, 0))
+
+        except Exception as e:
+            ctk.CTkLabel(
+                self._loans_panel,
+                text=f"Error loading loans: {e}",
+                font=FONTS["body_small"],
+                text_color=COLORS["danger"],
+            ).pack(pady=12)
+
+    # ── Recent repayments ──────────────────────────────────────────────────────
 
     def _build_recent_activity(self):
         ctk.CTkLabel(
@@ -255,7 +432,7 @@ class DashboardScreen(ctk.CTkFrame):
             font=FONTS["heading"],
             text_color=COLORS["accent_green_dark"],
             anchor="w",
-        ).grid(row=5, column=0, sticky="w", padx=28, pady=(28, 8))
+        ).grid(row=6, column=0, sticky="w", padx=28, pady=(28, 8))
 
         self.activity_frame = ctk.CTkFrame(
             self.content,
@@ -264,31 +441,39 @@ class DashboardScreen(ctk.CTkFrame):
             border_width=1,
             border_color=COLORS["border"],
         )
-        self.activity_frame.grid(row=6, column=0, sticky="ew",
+        self.activity_frame.grid(row=7, column=0, sticky="ew",
                                   padx=28, pady=(0, 28))
         self.activity_frame.columnconfigure(0, weight=1)
 
         self._render_activity_header()
-        self.activity_placeholder = ctk.CTkLabel(
+        ctk.CTkLabel(
             self.activity_frame, text="Loading…",
-            font=FONTS["body"], text_color=COLORS["text_muted"])
-        self.activity_placeholder.pack(pady=20)
+            font=FONTS["body"],
+            text_color=COLORS["text_muted"],
+        ).pack(pady=20)
 
     def _render_activity_header(self):
         hdr = ctk.CTkFrame(
             self.activity_frame,
             fg_color=COLORS["accent_green"],
-            corner_radius=0, height=36)
+            corner_radius=0,
+            height=36,
+        )
         hdr.pack(fill="x")
         hdr.pack_propagate(False)
-        for col_text, width in [("Receipt", 170), ("Loan No.", 140),
-                                  ("Amount", 130), ("Date", 100)]:
+        for col_text, width in [
+            ("Receipt",  170),
+            ("Loan No.", 140),
+            ("Amount",   130),
+            ("Date",     100),
+        ]:
             ctk.CTkLabel(
                 hdr, text=col_text,
                 font=FONTS["badge"],
                 text_color="#FFFFFF",
                 width=width,
-            ).pack(side="left", padx=(16 if col_text == "Receipt" else 0, 0))
+            ).pack(side="left",
+                   padx=(16 if col_text == "Receipt" else 0, 0))
 
     # ── Data loading ───────────────────────────────────────────────────────────
 
@@ -322,13 +507,12 @@ class DashboardScreen(ctk.CTkFrame):
                 w.destroy()
             self._render_activity_header()
 
-            recent = RepaymentService.get_all_recent_repayments(limit=8)
-            all_loans = {}
             try:
-                from app.core.services.loan_service import LoanService as LS
-                all_loans = {l.id: l for l in LS.get_all_loans()}
+                all_loans = {l.id: l for l in LoanService.get_all_loans()}
             except Exception:
-                pass
+                all_loans = {}
+
+            recent = RepaymentService.get_all_recent_repayments(limit=8)
 
             if not recent:
                 ctk.CTkLabel(
@@ -339,7 +523,8 @@ class DashboardScreen(ctk.CTkFrame):
                 ).pack(pady=20)
             else:
                 for i, r in enumerate(recent):
-                    bg  = COLORS["bg_card"] if i % 2 == 0 else COLORS["bg_input"]
+                    bg  = (COLORS["bg_card"] if i % 2 == 0
+                           else COLORS["bg_input"])
                     row = ctk.CTkFrame(self.activity_frame,
                                        fg_color=bg, height=38)
                     row.pack(fill="x")
@@ -347,33 +532,19 @@ class DashboardScreen(ctk.CTkFrame):
 
                     loan = all_loans.get(r.loan_id)
 
-                    ctk.CTkLabel(
-                        row, text=r.receipt_number,
-                        font=FONTS["body_small"],
-                        text_color=COLORS["text_primary"],
-                        width=170,
-                    ).pack(side="left", padx=16)
-
-                    ctk.CTkLabel(
-                        row,
-                        text=loan.loan_number if loan else "—",
-                        font=FONTS["body_small"],
-                        text_color=COLORS["text_secondary"],
-                        width=140,
-                    ).pack(side="left")
-
-                    ctk.CTkLabel(
-                        row, text=f"UGX {r.amount:,.0f}",
-                        font=FONTS["subheading"],
-                        text_color=COLORS["accent_green_dark"],
-                        width=130,
-                    ).pack(side="left")
-
-                    ctk.CTkLabel(
-                        row, text=str(r.payment_date),
-                        font=FONTS["body_small"],
-                        text_color=COLORS["text_muted"],
-                    ).pack(side="left")
+                    for text, width, color in [
+                        (r.receipt_number,                           170, COLORS["text_primary"]),
+                        (loan.loan_number if loan else "—",          140, COLORS["text_secondary"]),
+                        (f"UGX {r.amount:,.0f}",                     130, COLORS["accent_green_dark"]),
+                        (str(r.payment_date),                        100, COLORS["text_muted"]),
+                    ]:
+                        ctk.CTkLabel(
+                            row, text=text,
+                            font=FONTS["body_small"],
+                            text_color=color,
+                            width=width,
+                        ).pack(side="left",
+                               padx=(16 if width == 170 else 0, 0))
 
         except Exception as e:
             print(f"[Dashboard] Error loading stats: {e}")
