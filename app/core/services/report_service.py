@@ -204,7 +204,7 @@ class ReportService:
     # ── Loan Agreement ─────────────────────────────────────────────────────────
 
     @staticmethod
-    def generate_loan_agreement(loan, client, generated_by_id: int = None) -> str:
+    def generate_loan_agreement(loan, client, generated_by_id: int = None, save_path: str = None) -> str:
         """
         Generate a printable PDF loan agreement including:
         - Borrower details
@@ -219,7 +219,7 @@ class ReportService:
             generated_by_id:  ID of the user printing this (for audit log).
         """
         doc, _, path = ReportService._base_pdf(
-            f"loan_agreement_{loan.loan_number}.pdf")
+            f"loan_agreement_{loan.loan_number}.pdf", save_path=save_path)
 
         elements = ReportService._header_elements("LOAN AGREEMENT")
 

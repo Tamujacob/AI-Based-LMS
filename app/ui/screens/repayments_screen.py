@@ -440,13 +440,24 @@ class RepaymentsScreen(ctk.CTkFrame):
     def _print_receipt(self):
         if not self._last_receipt:
             return
+        from tkinter import filedialog
+        receipt_num = self._last_receipt.get("receipt_number", "receipt")
+        save_path = filedialog.asksaveasfilename(
+            parent           = self.winfo_toplevel(),
+            title            = "Save Receipt As",
+            initialfile      = f"receipt_{receipt_num}.pdf",
+            defaultextension = ".pdf",
+            filetypes        = [("PDF files", "*.pdf"), ("All files", "*.*")],
+        )
+        if not save_path:
+            return
         threading.Thread(
             target=self._generate_receipt_pdf,
-            args=(self._last_receipt,),
+            args=(self._last_receipt, save_path),
             daemon=True,
         ).start()
 
-    def _generate_receipt_pdf(self, data: dict):
+    def _generate_receipt_pdf(self, data: dict, save_path: str):
         try:
             import os
             from reportlab.lib.pagesizes import A5
@@ -459,8 +470,8 @@ class RepaymentsScreen(ctk.CTkFrame):
             from reportlab.lib.units import cm
             from datetime import datetime
 
-            os.makedirs("./reports", exist_ok=True)
-            filename = f"./reports/receipt_{data['receipt_number']}.pdf"
+            
+            filename = save_path
 
             doc = SimpleDocTemplate(
                 filename, pagesize=A5,

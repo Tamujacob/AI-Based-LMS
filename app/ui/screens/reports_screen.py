@@ -238,31 +238,17 @@ class ReportsScreen(ctk.CTkFrame):
     # ── Save dialog helper ─────────────────────────────────────────────────────
 
     def _ask_save_path(self, default_name: str, file_type: str) -> str | None:
-        """
-        Open a native Save As dialog and return the chosen path,
-        or None if the user cancelled.
+        from app.ui.components.save_dialog import SaveDialog
 
-        Args:
-            default_name:  Suggested filename (e.g. "portfolio_summary.pdf").
-            file_type:     "pdf" or "word".
-        """
-        if file_type == "pdf":
-            filetypes  = [("PDF files", "*.pdf"), ("All files", "*.*")]
-            defaultext = ".pdf"
-        else:
-            filetypes  = [("Word documents", "*.docx"), ("All files", "*.*")]
-            defaultext = ".docx"
-
-        # filedialog must run on the main thread
-        path = filedialog.asksaveasfilename(
-            parent      = self.winfo_toplevel(),
-            title       = "Save Report As",
-            initialfile = default_name,
-            defaultextension = defaultext,
-            filetypes   = filetypes,
+        extension = ".pdf" if file_type == "pdf" else ".docx"
+        dialog = SaveDialog(
+            self.winfo_toplevel(),
+            title        = "Save Report As",
+            default_name = default_name,
+            extension    = extension,
         )
-        return path if path else None
-
+        self.wait_window(dialog)
+        return dialog.result
     def _open_file(self, path: str):
         """Open the saved file with the system default viewer."""
         try:

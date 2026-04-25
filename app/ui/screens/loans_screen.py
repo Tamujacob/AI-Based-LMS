@@ -971,27 +971,34 @@ class LoansScreen(ctk.CTkFrame):
     # ── Print loan agreement ───────────────────────────────────────────────────
 
     def _print_loan_agreement(self, loan):
-        from tkinter import filedialog
-        save_path = filedialog.asksaveasfilename(
-            parent           = self.winfo_toplevel(),
-            title            = "Save Loan Agreement As",
-            initialfile      = f"loan_agreement_{loan.loan_number}.pdf",
-            defaultextension = ".pdf",
-            filetypes        = [("PDF files", "*.pdf"), ("All files", "*.*")],
+        from app.ui.components.save_dialog import SaveDialog
+
+        dialog = SaveDialog(
+            self.winfo_toplevel(),
+            title        = "Save Loan Agreement As",
+            default_name = f"loan_agreement_{loan.loan_number}.pdf",
+            extension    = ".pdf",
         )
+        self.wait_window(dialog)
+
+        save_path = dialog.result
         if not save_path:
             return
+
         try:
             from app.core.services.report_service import ReportService
             from app.core.services.client_service import ClientService
             import subprocess
+
             client   = ClientService.get_client_by_id(loan.client_id)
             pdf_path = ReportService.generate_loan_agreement(
-                loan=loan, client=client,
-                generated_by_id=self.current_user.id if self.current_user else None,
-                save_path=save_path,
+                loan            = loan,
+                client          = client,
+                generated_by_id = self.current_user.id if self.current_user else None,
+                save_path       = save_path,
             )
-            subprocess.Popen(["xdg-open", pdf_path])
+            if os.path.exists(pdf_path):
+                subprocess.Popen(["xdg-open", pdf_path])
         except Exception as e:
             self._show_error_popup(f"Could not generate document:\n{e}")
     # ── Load loans table ───────────────────────────────────────────────────────
