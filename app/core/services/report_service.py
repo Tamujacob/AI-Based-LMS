@@ -51,8 +51,9 @@ class ReportService:
     # ── PDF helpers ────────────────────────────────────────────────────────────
 
     @staticmethod
-    def _base_pdf(filename: str):
-        path = os.path.join(REPORTS_DIR, filename)
+    @staticmethod
+    def _base_pdf(filename: str, save_path: str = None):
+        path = save_path if save_path else os.path.join(REPORTS_DIR, filename)
         doc  = SimpleDocTemplate(
             path, pagesize=A4,
             topMargin=2*cm, bottomMargin=2*cm,
