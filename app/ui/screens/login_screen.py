@@ -198,7 +198,11 @@ class LoginScreen(ctk.CTkFrame):
             user = AuthService.authenticate(username, password)
             if self._destroyed:
                 return
-            if user:
+            if user == "inactive":
+                self._show_error("This account has been deactivated. Contact your administrator.")
+                if not self._destroyed:
+                    self.login_btn.configure(state="normal", text="Sign In")
+            elif user:
                 self.master.login(user)
             else:
                 self._show_error("Invalid username or password.")

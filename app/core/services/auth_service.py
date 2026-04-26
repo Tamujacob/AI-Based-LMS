@@ -16,19 +16,25 @@ class AuthService:
     def authenticate(username: str, password: str):
         """
         Verify username and password.
-        Returns the User object if valid, None if not.
+        Returns:
+            User object if valid and active
+            "inactive" string if user exists but is deactivated
+            None if username or password is wrong
         """
         with get_db() as db:
-            user = db.query(User).filter_by(username=username, is_active=True).first()
+            # Check without the is_active filter first
+            user = db.query(User).filter_by(username=username).first()
             if not user:
                 return None
             if not bcrypt.checkpw(password.encode(), user.password_hash.encode()):
                 return None
-            # Update last login time
+            if not user.is_active:
+                return "inactive"
+
+            # Valid and active — update last login
             user.last_login = datetime.utcnow()
             db.commit()
             db.refresh(user)
-            # Detach from session so it can be used outside
             db.expunge(user)
             return user
 
