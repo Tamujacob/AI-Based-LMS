@@ -130,11 +130,11 @@ class Loan(Base):
         if principal <= 0:
             raise ValueError("Principal amount must be greater than zero.")
 
-        self.total_interest      = principal * rate
+        self.total_interest      = principal * rate * months
         self.total_repayable     = principal + self.total_interest
         self.monthly_installment = self.total_repayable / months
 
-    # ── Computed properties ────────────────────────────────────────────────────
+            # ── Computed properties ────────────────────────────────────────────────────
 
     @property
     def amount_paid(self) -> Decimal:

@@ -937,7 +937,7 @@ class LoansScreen(ctk.CTkFrame):
             if principal <= 0 or months <= 0:
                 self.interest_preview.configure(text="")
                 return
-            interest = principal * 0.10
+            interest = principal * 0.10 * months
             total    = principal + interest
             monthly  = total / months
             self.interest_preview.configure(
