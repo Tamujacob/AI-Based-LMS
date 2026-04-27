@@ -1,14 +1,13 @@
 """
 app/ui/screens/chatbot_screen.py
 ──────────────────────────────────────────────────────────────
-AI Chatbot screen — updated to use AICore (unified AI class).
+AI Chatbot screen — powered by Groq API (free).
 
-Changes from previous version:
-  • Now calls AICore.chat() instead of Chatbot.respond()
-  • Claude is restricted to Bingongold Credit topics only
-  • Falls back to local answers if no API key
-  • Shows online/offline status badge
-  • Input box fixed above taskbar
+- Uses AICore.chat() which routes through Groq
+- Shows Online / Offline badge depending on GROQ_API_KEY in .env
+- Falls back to local answers if no key is set
+- Input box anchored above taskbar (fixed height row)
+- Restricted to Bingongold Credit topics only
 """
 
 import threading
@@ -41,11 +40,11 @@ class ChatbotScreen(ctk.CTkFrame):
         self._check_api_status()
         self._add_message(
             "assistant",
-            "Hello! I am the Bingongold Credit AI Assistant.\n\n"
+            "Hello! I am the Bingongold Credit AI Assistant, powered by Groq.\n\n"
             "I can only answer questions about your loans, clients, and repayments. "
             "I have live access to your database.\n\n"
-            "Try: \"Show me all overdue loans\" or "
-            "\"What is the risk on loan BG-2025-00001?\""
+            'Try: "Show me all overdue loans"  or  '
+            '"What is the risk on loan BG-2025-00001?"'
         )
 
     def _navigate(self, screen):
@@ -53,6 +52,8 @@ class ChatbotScreen(ctk.CTkFrame):
             self.master.logout()
         else:
             self.master.show_screen(screen)
+
+    # ── Layout ─────────────────────────────────────────────────────────────────
 
     def _build(self):
         self.columnconfigure(1, weight=1)
@@ -79,42 +80,51 @@ class ChatbotScreen(ctk.CTkFrame):
         chat_outer.rowconfigure(1, weight=1)   # messages expand
         chat_outer.rowconfigure(2, weight=0)   # input stays fixed
 
-        # Title row
+        # ── Title row ──────────────────────────────────────────────────────────
         title_row = ctk.CTkFrame(chat_outer, fg_color="transparent")
         title_row.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         title_row.columnconfigure(1, weight=1)
 
-        ctk.CTkLabel(title_row, text="AI Chatbot",
-                     font=FONTS["title"],
-                     text_color=COLORS["accent_green_dark"]).grid(
-            row=0, column=0, sticky="w")
+        ctk.CTkLabel(
+            title_row, text="AI Chatbot",
+            font=FONTS["title"],
+            text_color=COLORS["accent_green_dark"],
+        ).grid(row=0, column=0, sticky="w")
 
+        # API status badge
         self.status_badge = ctk.CTkLabel(
-            title_row, text="● checking...",
+            title_row,
+            text="● checking...",
             font=FONTS["caption"],
-            text_color=COLORS["text_muted"])
+            text_color=COLORS["text_muted"],
+        )
         self.status_badge.grid(row=0, column=1, sticky="w", padx=(12, 0))
 
-        ctk.CTkButton(title_row, text="Clear Chat", width=100, height=30,
-                      font=FONTS["body_small"],
-                      fg_color=COLORS["border"],
-                      hover_color=COLORS["bg_input"],
-                      text_color=COLORS["text_secondary"],
-                      corner_radius=6,
-                      command=self._clear_chat).grid(row=0, column=2, sticky="e")
+        ctk.CTkButton(
+            title_row, text="Clear Chat",
+            width=100, height=30,
+            font=FONTS["body_small"],
+            fg_color=COLORS["border"],
+            hover_color=COLORS["bg_input"],
+            text_color=COLORS["text_secondary"],
+            corner_radius=6,
+            command=self._clear_chat,
+        ).grid(row=0, column=2, sticky="e")
 
-        # Messages area
+        # ── Messages scrollable area ───────────────────────────────────────────
         self.messages_frame = ctk.CTkScrollableFrame(
             chat_outer,
             fg_color=COLORS["bg_card"],
             corner_radius=10,
             border_width=1,
             border_color=COLORS["border"],
-            scrollbar_button_color=COLORS["border"])
+            scrollbar_button_color=COLORS["accent_green"],
+            scrollbar_button_hover_color=COLORS["accent_green_dark"],
+        )
         self.messages_frame.grid(row=1, column=0, sticky="nsew", pady=(0, 10))
         self.messages_frame.columnconfigure(0, weight=1)
 
-        # Input row — FIXED height, never hidden behind taskbar
+        # ── Input row — fixed height so it never goes behind the taskbar ──────
         input_frame = ctk.CTkFrame(chat_outer, fg_color="transparent", height=52)
         input_frame.grid(row=2, column=0, sticky="ew")
         input_frame.grid_propagate(False)
@@ -152,23 +162,29 @@ class ChatbotScreen(ctk.CTkFrame):
     # ── Suggestions panel ──────────────────────────────────────────────────────
 
     def _build_suggestions_panel(self, parent):
-        panel = ctk.CTkFrame(parent, fg_color=COLORS["bg_card"],
-                              corner_radius=10, border_width=1,
-                              border_color=COLORS["border"])
+        panel = ctk.CTkFrame(
+            parent,
+            fg_color=COLORS["bg_card"],
+            corner_radius=10,
+            border_width=1,
+            border_color=COLORS["border"],
+        )
         panel.grid(row=0, column=1, sticky="nsew", padx=(8, 24), pady=24)
         panel.columnconfigure(0, weight=1)
 
-        ctk.CTkLabel(panel, text="Suggested Questions",
-                     font=FONTS["subheading"],
-                     text_color=COLORS["accent_green_dark"]).pack(
-            anchor="w", padx=16, pady=(16, 6))
+        ctk.CTkLabel(
+            panel, text="Suggested Questions",
+            font=FONTS["subheading"],
+            text_color=COLORS["accent_green_dark"],
+        ).pack(anchor="w", padx=16, pady=(16, 6))
 
         ctk.CTkFrame(panel, fg_color=COLORS["border"],
                      height=1).pack(fill="x", padx=16, pady=(0, 6))
 
         for query in SUGGESTED_QUERIES:
             ctk.CTkButton(
-                panel, text=query, anchor="w", height=36,
+                panel, text=query,
+                anchor="w", height=36,
                 font=FONTS["body_small"],
                 fg_color="transparent",
                 hover_color=COLORS["bg_input"],
@@ -177,18 +193,19 @@ class ChatbotScreen(ctk.CTkFrame):
                 command=lambda q=query: self._use_suggestion(q),
             ).pack(fill="x", padx=8, pady=2)
 
+        # Spacer
         ctk.CTkFrame(panel, fg_color="transparent").pack(fill="both", expand=True)
 
-        # Offline note at bottom
+        # Footer note
         ctk.CTkLabel(
             panel,
-            text="Tip: Works offline using\nlocal data. Claude API\noptional for richer answers.",
+            text="Powered by Groq (free)\nFalls back to local mode\nif no API key is set.",
             font=FONTS["caption"],
             text_color=COLORS["text_muted"],
             justify="center",
         ).pack(pady=(0, 12))
 
-    # ── Message display ────────────────────────────────────────────────────────
+    # ── Message rendering ──────────────────────────────────────────────────────
 
     def _add_message(self, role: str, text: str):
         is_user      = (role == "user")
@@ -201,21 +218,30 @@ class ChatbotScreen(ctk.CTkFrame):
 
         time_str   = datetime.now().strftime("%H:%M")
         label_text = f"You  {time_str}" if is_user else f"Assistant  {time_str}"
-        ctk.CTkLabel(wrapper, text=label_text,
-                     font=FONTS["caption"],
-                     text_color=COLORS["text_muted"],
-                     anchor=align).pack(fill="x")
+
+        ctk.CTkLabel(
+            wrapper, text=label_text,
+            font=FONTS["caption"],
+            text_color=COLORS["text_muted"],
+            anchor=align,
+        ).pack(fill="x")
 
         bubble = ctk.CTkFrame(wrapper, fg_color=bubble_color, corner_radius=10)
         bubble.pack(anchor=align, pady=(2, 0))
-        ctk.CTkLabel(bubble, text=text,
-                     font=FONTS["body_small"],
-                     text_color=text_color,
-                     anchor="w", justify="left",
-                     wraplength=480).pack(padx=14, pady=10)
 
-        self.after(100,
-                   lambda: self.messages_frame._parent_canvas.yview_moveto(1.0))
+        ctk.CTkLabel(
+            bubble, text=text,
+            font=FONTS["body_small"],
+            text_color=text_color,
+            anchor="w", justify="left",
+            wraplength=480,
+        ).pack(padx=14, pady=10)
+
+        # Scroll to bottom
+        self.after(
+            100,
+            lambda: self.messages_frame._parent_canvas.yview_moveto(1.0),
+        )
 
     # ── Actions ────────────────────────────────────────────────────────────────
 
@@ -237,8 +263,11 @@ class ChatbotScreen(ctk.CTkFrame):
         self.input_var.set("")
         self.send_btn.configure(state="disabled", text="...")
         self.conversation_history.append({"role": "user", "content": message})
-        threading.Thread(target=self._get_response,
-                         args=(message,), daemon=True).start()
+        threading.Thread(
+            target=self._get_response,
+            args=(message,),
+            daemon=True,
+        ).start()
 
     def _get_response(self, message: str):
         try:
@@ -252,26 +281,34 @@ class ChatbotScreen(ctk.CTkFrame):
             self.after(0, lambda: self._add_message("assistant", response))
         except Exception as e:
             self.after(0, lambda: self._add_message(
-                "assistant", f"Error: {e}\n\nPlease try again."))
+                "assistant",
+                f"Something went wrong: {e}\n\nPlease try again."
+            ))
         finally:
             self.after(0, lambda: self.send_btn.configure(
                 state="normal", text="Send"))
 
+    # ── API status badge ───────────────────────────────────────────────────────
+
     def _check_api_status(self):
         def check():
             try:
-                from app.config.settings import ANTHROPIC_API_KEY
-                if ANTHROPIC_API_KEY and len(ANTHROPIC_API_KEY) > 10:
+                from app.core.agents.ai_core import AICore
+                status = AICore.check_groq_status()
+                if status == "online":
                     self.after(0, lambda: self.status_badge.configure(
-                        text="● Online (Claude API)",
-                        text_color=COLORS["accent_green"]))
+                        text="● Online  (Groq — llama-3.3-70b)",
+                        text_color=COLORS["accent_green"],
+                    ))
                 else:
                     self.after(0, lambda: self.status_badge.configure(
-                        text="● Offline (local mode)",
-                        text_color=COLORS["warning"]))
+                        text="● Offline  (local mode — add GROQ_API_KEY to .env)",
+                        text_color=COLORS["warning"],
+                    ))
             except Exception:
                 self.after(0, lambda: self.status_badge.configure(
-                    text="● Offline (local mode)",
-                    text_color=COLORS["warning"]))
+                    text="● Offline  (local mode)",
+                    text_color=COLORS["warning"],
+                ))
 
         threading.Thread(target=check, daemon=True).start()
