@@ -18,8 +18,8 @@ python-docx>=1.1.0
 # ── Configuration ─────────────────────────────────────────────────────────────
 python-dotenv>=1.0.0
 
-# ── AI — Online (optional, chatbot only) ──────────────────────────────────────
-anthropic>=0.40.0
+# ── AI — Online (Groq, free tier) ─────────────────────────────────────────────
+groq>=0.9.0
 
 # ── AI — Offline (local risk model, always works) ─────────────────────────────
 scikit-learn>=1.4.0
@@ -31,7 +31,6 @@ pandas>=2.0.0
 pdfplumber>=0.11.0
 python-dateutil>=2.9.0
 
-# ── Statement parsing — image/screenshot (optional) ───────────────────────────
-# Uncomment if you want OCR support for statement screenshots:
+# ── Statement parsing — image/screenshot OCR (optional) ───────────────────────
+# Uncomment to enable OCR support for statement screenshots:
 # pytesseract>=0.3.10
-# Pillow is already above
