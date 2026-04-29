@@ -58,6 +58,10 @@ class LogsScreen(ctk.CTkFrame):
         self._load_user_filter()
         self._load_logs()
 
+    def refresh(self):
+        import threading
+        threading.Thread(target=self._load_logs, daemon=True).start()    
+
     # ── navigation ─────────────────────────────────────────────────────────────
 
     def _navigate(self, screen: str):
