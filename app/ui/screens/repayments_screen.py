@@ -64,6 +64,10 @@ class LoanPickerDialog(tk.Toplevel):
 
         self._build()
 
+    def refresh(self):
+        import threading
+        threading.Thread(target=self._load_history, daemon=True).start()
+        
     def _build(self):
         # Header
         hdr = tk.Frame(self, bg=_GREEN_DARK, height=52)
