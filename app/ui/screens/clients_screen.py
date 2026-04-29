@@ -2,8 +2,11 @@
 app/ui/screens/clients_screen.py
 Client management — searchable table, add/edit client form with
 visible placeholders and DatePicker on date of birth.
+
+Updated: refresh() method added for AppRoot screen caching.
 """
 
+import threading
 import customtkinter as ctk
 from datetime import date, datetime
 from app.ui.styles.theme import (COLORS, FONTS, primary_button_style,
@@ -20,13 +23,28 @@ class ClientsScreen(ctk.CTkFrame):
         self.current_user = master.current_user
         self.selected_client = None
         self._build()
-        self._load_clients()
+        # Load data in background so UI appears instantly
+        threading.Thread(target=self._load_clients, daemon=True).start()
+
+    # ── Refresh — called by AppRoot on every return visit ─────────────────
+
+    def refresh(self):
+        """
+        AppRoot calls this every time the user navigates back to Clients.
+        Reloads the client table in a background thread — never blocks the UI.
+        Preserves any open form state.
+        """
+        threading.Thread(target=self._load_clients, daemon=True).start()
+
+    # ── Navigation ────────────────────────────────────────────────────────
 
     def _navigate(self, screen):
         if screen == "logout":
             self.master.logout()
         else:
             self.master.show_screen(screen)
+
+    # ── Layout ────────────────────────────────────────────────────────────
 
     def _build(self):
         self.columnconfigure(1, weight=1)
@@ -42,6 +60,7 @@ class ClientsScreen(ctk.CTkFrame):
         self._build_form_panel(main)
 
     # ── Left: Client List ──────────────────────────────────────────────────
+
     def _build_list_panel(self, parent):
         panel = ctk.CTkFrame(parent, fg_color="transparent")
         panel.grid(row=0, column=0, sticky="nsew", padx=(24, 8), pady=24)
@@ -77,6 +96,7 @@ class ClientsScreen(ctk.CTkFrame):
         self.table.grid(row=2, column=0, sticky="nsew")
 
     # ── Right: Form Panel ──────────────────────────────────────────────────
+
     def _build_form_panel(self, parent):
         self.form_panel = ctk.CTkScrollableFrame(
             parent, fg_color=COLORS["bg_card"], corner_radius=12,
@@ -124,6 +144,7 @@ class ClientsScreen(ctk.CTkFrame):
             })
 
     # ── Form renderer ──────────────────────────────────────────────────────
+
     def _render_form(self, data: dict):
         for w in self.form_panel.winfo_children():
             w.destroy()
@@ -135,21 +156,21 @@ class ClientsScreen(ctk.CTkFrame):
                      text_color=COLORS["text_primary"]).pack(
             anchor="w", padx=20, pady=(20, 4))
 
-        # Store entry widget references for reading on save
         self._entries = {}
 
         # ── Personal Information ───────────────────────────────────────
         self._section("Personal Information")
 
-        self._entry_field("full_name",    "Full Name *",       "e.g.  John Mukasa",          data)
-        self._entry_field("nin",          "National ID (NIN)", "e.g.  CM12345678AB",          data)
-        self._entry_field("gender",       "Gender",            "Male  or  Female",            data)
+        self._entry_field("full_name", "Full Name *",       "e.g.  John Mukasa",   data)
+        self._entry_field("nin",       "National ID (NIN)", "e.g.  CM12345678AB",  data)
+        self._entry_field("gender",    "Gender",            "Male  or  Female",    data)
 
         # Date of Birth — DatePicker
         self._label("Date of Birth")
         dob_str = data.get("date_of_birth", "")
         try:
-            dob_initial = datetime.strptime(dob_str, "%Y-%m-%d").date() if dob_str else date(2000, 1, 1)
+            dob_initial = (datetime.strptime(dob_str, "%Y-%m-%d").date()
+                           if dob_str else date(2000, 1, 1))
         except ValueError:
             dob_initial = date(2000, 1, 1)
         dob_row = ctk.CTkFrame(self.form_panel, fg_color="transparent")
@@ -161,15 +182,15 @@ class ClientsScreen(ctk.CTkFrame):
         # ── Contact Details ────────────────────────────────────────────
         self._section("Contact Details")
 
-        self._entry_field("phone_number",     "Phone Number *",  "e.g.  0701234567",   data)
-        self._entry_field("alt_phone_number", "Alt. Phone",      "e.g.  0771234567",   data)
-        self._entry_field("email",            "Email",           "e.g.  john@mail.com",data)
+        self._entry_field("phone_number",     "Phone Number *", "e.g.  0701234567",    data)
+        self._entry_field("alt_phone_number", "Alt. Phone",     "e.g.  0771234567",    data)
+        self._entry_field("email",            "Email",          "e.g.  john@mail.com", data)
 
         # ── Location ───────────────────────────────────────────────────
         self._section("Location")
 
-        self._entry_field("district", "District",        "e.g.  Kampala",    data)
-        self._entry_field("village",  "Village / Parish","e.g.  Wandegeya",  data)
+        self._entry_field("district", "District",         "e.g.  Kampala",   data)
+        self._entry_field("village",  "Village / Parish", "e.g.  Wandegeya", data)
 
         self._label("Physical Address")
         addr_widget = ctk.CTkTextbox(
@@ -183,23 +204,27 @@ class ClientsScreen(ctk.CTkFrame):
         else:
             addr_widget.insert("1.0", "e.g.  Plot 5, Kampala Road, Kampala")
             addr_widget.configure(text_color=COLORS["text_muted"])
-            addr_widget.bind("<FocusIn>",  lambda e: self._clear_hint(addr_widget,  "e.g.  Plot 5, Kampala Road, Kampala"))
-            addr_widget.bind("<FocusOut>", lambda e: self._restore_hint(addr_widget,"e.g.  Plot 5, Kampala Road, Kampala"))
+            addr_widget.bind("<FocusIn>",
+                             lambda e: self._clear_hint(
+                                 addr_widget, "e.g.  Plot 5, Kampala Road, Kampala"))
+            addr_widget.bind("<FocusOut>",
+                             lambda e: self._restore_hint(
+                                 addr_widget, "e.g.  Plot 5, Kampala Road, Kampala"))
         self._entries["physical_address_widget"] = addr_widget
 
         # ── Employment ─────────────────────────────────────────────────
         self._section("Employment")
 
-        self._entry_field("occupation",    "Occupation",              "e.g.  Teacher, Trader, Farmer", data)
-        self._entry_field("employer_name", "Employer / Business Name","e.g.  Kampala City Council",    data)
-        self._entry_field("monthly_income","Monthly Income (UGX)",    "e.g.  500000",                  data)
+        self._entry_field("occupation",     "Occupation",               "e.g.  Teacher, Trader, Farmer", data)
+        self._entry_field("employer_name",  "Employer / Business Name", "e.g.  Kampala City Council",    data)
+        self._entry_field("monthly_income", "Monthly Income (UGX)",     "e.g.  500000",                  data)
 
         # ── Next of Kin ────────────────────────────────────────────────
         self._section("Next of Kin")
 
-        self._entry_field("next_of_kin_name",         "Full Name",         "e.g.  Mary Mukasa",      data)
-        self._entry_field("next_of_kin_phone",        "Phone Number",      "e.g.  0712345678",       data)
-        self._entry_field("next_of_kin_relationship", "Relationship",      "e.g.  Spouse, Parent",   data)
+        self._entry_field("next_of_kin_name",         "Full Name",    "e.g.  Mary Mukasa",    data)
+        self._entry_field("next_of_kin_phone",        "Phone Number", "e.g.  0712345678",     data)
+        self._entry_field("next_of_kin_relationship", "Relationship", "e.g.  Spouse, Parent", data)
 
         # ── Notes ──────────────────────────────────────────────────────
         self._section("Additional Notes")
@@ -214,10 +239,11 @@ class ClientsScreen(ctk.CTkFrame):
         if data.get("notes"):
             notes_widget.insert("1.0", data["notes"])
         else:
-            notes_widget.insert("1.0", "Any additional information about the client...")
+            hint = "Any additional information about the client..."
+            notes_widget.insert("1.0", hint)
             notes_widget.configure(text_color=COLORS["text_muted"])
-            notes_widget.bind("<FocusIn>",  lambda e: self._clear_hint(notes_widget,  "Any additional information about the client..."))
-            notes_widget.bind("<FocusOut>", lambda e: self._restore_hint(notes_widget,"Any additional information about the client..."))
+            notes_widget.bind("<FocusIn>",  lambda e: self._clear_hint(notes_widget, hint))
+            notes_widget.bind("<FocusOut>", lambda e: self._restore_hint(notes_widget, hint))
         self._entries["notes_widget"] = notes_widget
 
         # ── Error + buttons ────────────────────────────────────────────
@@ -242,8 +268,8 @@ class ClientsScreen(ctk.CTkFrame):
                 row=0, column=1, padx=(4, 0), sticky="ew")
 
     # ── Helpers ───────────────────────────────────────────────────────────
+
     def _section(self, text: str):
-        """Styled section divider."""
         ctk.CTkFrame(self.form_panel, fg_color=COLORS["border"],
                      height=1).pack(fill="x", padx=20, pady=(14, 0))
         ctk.CTkLabel(self.form_panel, text=text,
@@ -258,45 +284,35 @@ class ClientsScreen(ctk.CTkFrame):
                      anchor="w").pack(fill="x", padx=20, pady=(8, 2))
 
     def _entry_field(self, key: str, label: str, placeholder: str, data: dict):
-        """
-        Render a label + CTkEntry.
-        If data[key] has a value, set it via StringVar (placeholder hidden).
-        If data[key] is empty, bind NO StringVar so CustomTkinter shows the
-        placeholder text natively.
-        """
         self._label(label)
         existing = data.get(key, "")
         if existing:
-            # Pre-fill with existing value
-            var = ctk.StringVar(value=existing)
+            var   = ctk.StringVar(value=existing)
             entry = ctk.CTkEntry(self.form_panel, textvariable=var,
                                  placeholder_text=placeholder, **input_style())
             self._entries[key + "_var"] = var
         else:
-            # No StringVar — placeholder will be visible
             entry = ctk.CTkEntry(self.form_panel,
                                  placeholder_text=placeholder, **input_style())
         entry.pack(fill="x", padx=20)
         self._entries[key] = entry
 
     def _clear_hint(self, widget, hint: str):
-        """Clear textbox hint text on focus."""
         if widget.get("1.0", "end").strip() == hint:
             widget.delete("1.0", "end")
             widget.configure(text_color=COLORS["text_primary"])
 
     def _restore_hint(self, widget, hint: str):
-        """Restore textbox hint text if left empty."""
         if not widget.get("1.0", "end").strip():
             widget.insert("1.0", hint)
             widget.configure(text_color=COLORS["text_muted"])
 
     # ── Save ──────────────────────────────────────────────────────────────
+
     def _save_client(self):
         from app.core.services.client_service import ClientService
 
         def _get(key):
-            """Read value from entry widget or its StringVar."""
             if key + "_var" in self._entries:
                 return self._entries[key + "_var"].get().strip()
             widget = self._entries.get(key)
@@ -309,10 +325,9 @@ class ClientsScreen(ctk.CTkFrame):
             if not widget:
                 return ""
             val = widget.get("1.0", "end").strip()
-            # Don't save hint text
             hints = {
                 "physical_address": "e.g.  Plot 5, Kampala Road, Kampala",
-                "notes": "Any additional information about the client...",
+                "notes":            "Any additional information about the client...",
             }
             return "" if val == hints.get(key, "") else val
 
@@ -355,6 +370,7 @@ class ClientsScreen(ctk.CTkFrame):
             self.form_error.configure(text=f"⚠  {e}")
 
     # ── Delete ────────────────────────────────────────────────────────────
+
     def _delete_client(self):
         if self.selected_client:
             from app.core.services.client_service import ClientService
@@ -364,16 +380,29 @@ class ClientsScreen(ctk.CTkFrame):
             self._show_empty_form_state()
 
     # ── Load table ────────────────────────────────────────────────────────
+
     def _load_clients(self, *args):
-        from app.core.services.client_service import ClientService
-        search  = self.search_var.get().strip() if hasattr(self, "search_var") else None
-        clients = ClientService.get_all_clients(search=search or None)
-        rows = [{
-            "id":           c.id,
-            "full_name":    c.full_name,
-            "nin":          c.nin or "—",
-            "phone_number": c.phone_number,
-            "occupation":   c.occupation or "—",
-        } for c in clients]
-        if hasattr(self, "table"):
-            self.table.update_rows(rows)
+        """
+        Loads clients from the database.
+        Safe to call from a background thread — uses self.after()
+        to update the table widget on the main thread.
+        """
+        try:
+            from app.core.services.client_service import ClientService
+            search  = (self.search_var.get().strip()
+                       if hasattr(self, "search_var") else None)
+            clients = ClientService.get_all_clients(search=search or None)
+            rows = [{
+                "id":           c.id,
+                "full_name":    c.full_name,
+                "nin":          c.nin or "—",
+                "phone_number": c.phone_number,
+                "occupation":   c.occupation or "—",
+            } for c in clients]
+
+            # Update the table on the main thread
+            if hasattr(self, "table"):
+                self.after(0, lambda: self.table.update_rows(rows))
+
+        except Exception as e:
+            print(f"[ClientsScreen] Error loading clients: {e}")
