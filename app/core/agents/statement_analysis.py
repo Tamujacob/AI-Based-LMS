@@ -2,16 +2,13 @@
 app/core/models/statement_analysis.py
 ──────────────────────────────────────────────────────────────
 Database model for storing financial statement analysis results.
-
-Linked to a loan record. Stores parsed results from
-StatementParser and LoanCeilingEngine so managers can
-review the analysis that was used when approving a loan.
+Linked to a loan record so management can review the analysis
+that was done when the loan was applied for.
 """
 
 from datetime import datetime
 from sqlalchemy import (
-    Column, Integer, String, Numeric, DateTime,
-    ForeignKey, Text, Boolean
+    Column, Integer, String, Float, DateTime, ForeignKey, Text
 )
 from sqlalchemy.orm import relationship
 from app.database.base import Base
@@ -20,51 +17,57 @@ from app.database.base import Base
 class StatementAnalysis(Base):
     __tablename__ = "statement_analyses"
 
-    id              = Column(Integer, primary_key=True, autoincrement=True)
+    id                  = Column(Integer, primary_key=True, autoincrement=True)
 
-    # Link to loan and uploading user
-    loan_id         = Column(Integer, ForeignKey("loans.id"), nullable=True)
-    client_id       = Column(Integer, ForeignKey("clients.id"), nullable=True)
-    uploaded_by_id  = Column(Integer, ForeignKey("users.id"), nullable=True)
+    # Foreign keys
+    loan_id             = Column(Integer, ForeignKey("loans.id"),
+                                 nullable=False, index=True)
+    created_by_id       = Column(Integer, ForeignKey("users.id"), nullable=True)
 
-    # Statement metadata
-    statement_type        = Column(String(50), nullable=True)   # mtn, airtel, bank
-    statement_file_path   = Column(String(500), nullable=True)
-    statement_from        = Column(String(20), nullable=True)   # stored as string
-    statement_to          = Column(String(20), nullable=True)
-    months_covered        = Column(Integer, nullable=True)
-    transactions_found    = Column(Integer, default=0)
+    # Source file info
+    source_file         = Column(String(500), nullable=True)
+    statement_type      = Column(String(30),  nullable=True)  # mtn / airtel / bank
 
-    # Extracted financial figures (UGX)
-    total_credits         = Column(Numeric(14, 2), nullable=True)
-    total_debits          = Column(Numeric(14, 2), nullable=True)
-    avg_monthly_income    = Column(Numeric(14, 2), nullable=True)
-    avg_monthly_expense   = Column(Numeric(14, 2), nullable=True)
-    net_monthly_flow      = Column(Numeric(14, 2), nullable=True)
-    income_consistency    = Column(String(20), nullable=True)   # HIGH/MEDIUM/LOW
+    # Statement period
+    statement_from      = Column(String(20),  nullable=True)
+    statement_to        = Column(String(20),  nullable=True)
+    months_covered      = Column(Integer,     nullable=True, default=1)
 
-    # Ceiling engine results
-    recommended_ceiling       = Column(Numeric(14, 2), nullable=True)
-    max_monthly_instalment    = Column(Numeric(14, 2), nullable=True)
-    recommended_duration      = Column(Integer, nullable=True)
-    affordability_score       = Column(Integer, nullable=True)   # 0-100
-    red_flags                 = Column(Text, nullable=True)      # JSON or newline-separated
+    # Income analysis
+    total_credits       = Column(Float, nullable=True, default=0.0)
+    total_debits        = Column(Float, nullable=True, default=0.0)
+    avg_monthly_income  = Column(Float, nullable=True, default=0.0)
+    avg_monthly_expense = Column(Float, nullable=True, default=0.0)
+    net_monthly_flow    = Column(Float, nullable=True, default=0.0)
+    income_consistency  = Column(String(10), nullable=True)  # HIGH / MEDIUM / LOW
 
-    # Whether officer accepted the recommendation
-    recommendation_accepted   = Column(Boolean, default=False)
+    # Ceiling recommendation
+    recommended_ceiling = Column(Float, nullable=True, default=0.0)
+    affordability_score = Column(Integer, nullable=True, default=0)
 
-    # Raw notes
-    parse_warnings            = Column(Text, nullable=True)
-    analyst_notes             = Column(Text, nullable=True)
+    # Scenarios stored as text for display
+    scenarios_text      = Column(Text, nullable=True)
 
-    created_at    = Column(DateTime, default=datetime.utcnow, nullable=False)
+    # Red flags
+    red_flags           = Column(Text, nullable=True)
+
+    # System
+    created_at          = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     # Relationships
-    loan          = relationship("Loan",   foreign_keys=[loan_id])
-    client        = relationship("Client", foreign_keys=[client_id])
-    uploaded_by   = relationship("User",   foreign_keys=[uploaded_by_id])
+    loan       = relationship("Loan",     foreign_keys=[loan_id])
+    created_by = relationship("User",     foreign_keys=[created_by_id])
 
     def __repr__(self):
-        return (f"<StatementAnalysis loan={self.loan_id} "
+        return (f"<StatementAnalysis loan_id={self.loan_id} "
                 f"type={self.statement_type} "
                 f"ceiling={self.recommended_ceiling}>")
+
+    def summary_text(self) -> str:
+        return (
+            f"Type: {self.statement_type or '—'}  |  "
+            f"Months: {self.months_covered}  |  "
+            f"Net Flow: UGX {self.net_monthly_flow:,.0f}  |  "
+            f"Ceiling: UGX {self.recommended_ceiling:,.0f}  |  "
+            f"Score: {self.affordability_score}/100"
+        )
