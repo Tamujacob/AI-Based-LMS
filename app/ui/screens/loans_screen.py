@@ -651,21 +651,52 @@ class LoansScreen(ctk.CTkFrame):
     def _new_loan_form(self):
         self.selected_loan     = None
         self.found_client_id   = None
+        # ── Financial Statement Analysis (optional) ────────────────────────────────
+        self._divider()
+        self._section("Financial Statement Analysis")
+        ctk.CTkLabel(
+            self.detail_panel,
+            text="Optional — upload a MoMo or bank statement for AI loan sizing."
+                " Skip this section if the borrower has no digital account.",
+            font=FONTS["caption"],
+            text_color=COLORS["text_muted"],
+            wraplength=300,
+            justify="left",
+        ).pack(anchor="w", padx=20, pady=(0, 8))
+
+        def _on_statement_accepted(principal: float, duration: int, ceiling):
+            # Auto-fill principal and duration fields when staff clicks Accept
+            self.principal_entry.delete(0, "end")
+            self.principal_entry.insert(0, str(int(principal)))
+            self.duration_entry.delete(0, "end")
+            self.duration_entry.insert(0, str(int(duration)))
+            self._update_interest_preview()
+
+        stmt_frame = ctk.CTkFrame(self.detail_panel, fg_color="transparent")
+        stmt_frame.pack(fill="x", padx=20, pady=(0, 8))
+        stmt_frame.columnconfigure(0, weight=1)
+
+        self.statement_widget = StatementAnalysisWidget(
+            stmt_frame,
+            on_accept=_on_statement_accepted,
+            current_user=self.current_user,
+        )
+        self.statement_widget.grid(row=0, column=0, sticky="ew")
         self._collateral_files = []
         for w in self.detail_panel.winfo_children():
-            w.destroy()
+                    w.destroy()
+                    ctk.CTkLabel(self.detail_panel, text="New Loan Application",
+                            font=FONTS["subtitle"],
+                            text_color=COLORS["accent_green_dark"]).pack(
+                    anchor="w", padx=20, pady=(20, 4))
+                    ctk.CTkLabel(self.detail_panel,
+                            text="Fill in all required fields (*) then click Submit.",
+                            font=FONTS["body_small"],
+                            text_color=COLORS["text_muted"]).pack(
+                    anchor="w", padx=20, pady=(0, 8))
 
-        ctk.CTkLabel(self.detail_panel, text="New Loan Application",
-                     font=FONTS["subtitle"],
-                     text_color=COLORS["accent_green_dark"]).pack(
-            anchor="w", padx=20, pady=(20, 4))
-        ctk.CTkLabel(self.detail_panel,
-                     text="Fill in all required fields (*) then click Submit.",
-                     font=FONTS["body_small"],
-                     text_color=COLORS["text_muted"]).pack(
-            anchor="w", padx=20, pady=(0, 8))
-
-        # ── Loan ID preview (read-only) ────────────────────────────────────
+                # ── Loan ID preview (read-only) ────────────────────────────────────
+                # ── Loan ID preview (read-only) ────────────────────────────────────
         id_frame = ctk.CTkFrame(
             self.detail_panel, fg_color=COLORS["bg_input"],
             corner_radius=8, border_width=1, border_color=COLORS["border"])
@@ -674,7 +705,6 @@ class LoansScreen(ctk.CTkFrame):
         id_inner = ctk.CTkFrame(id_frame, fg_color="transparent")
         id_inner.pack(fill="x", padx=14, pady=10)
         id_inner.columnconfigure(1, weight=1)
-
         ctk.CTkLabel(id_inner, text="🔖  Loan ID:",
                      font=FONTS["body_small"],
                      text_color=COLORS["text_muted"],
