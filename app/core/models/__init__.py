@@ -6,7 +6,7 @@ from app.core.models.loan import Loan, LoanStatus, LoanType
 from app.core.models.repayment import Repayment, PaymentMethod, RepaymentStatus
 from app.core.models.collateral import Collateral
 from app.core.models.audit_log import AuditLog
-
+from app.core.models.statement_analysis import StatementAnalysis
 __all__ = [
     "User", "UserRole",
     "Client",
