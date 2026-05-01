@@ -30,3 +30,6 @@ Thumbs.db
 *.egg-info/
 dist/
 build/
+
+echo "data/training/" >> .gitignore
+echo "models/*.pkl" >> .gitignore

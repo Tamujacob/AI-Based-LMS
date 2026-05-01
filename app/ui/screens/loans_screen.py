@@ -25,6 +25,7 @@ from app.ui.styles.theme import (
 from app.ui.components.sidebar import Sidebar
 from app.ui.components.data_table import DataTable
 from app.ui.components.date_picker import DatePicker
+from app.ui.components.statement_analysis_widget import StatementAnalysisWidget
 from app.config.settings import LOAN_TYPES, COLLATERAL_UPLOAD_DIR
 
 # ── Colour shortcuts ───────────────────────────────────────────────────────────
@@ -765,6 +766,37 @@ class LoansScreen(ctk.CTkFrame):
             text_color=COLORS["accent_green_dark"])
         self.interest_preview.pack(anchor="w", padx=20, pady=(8, 0))
 
+        # ── Financial Statement Analysis (optional) ────────────────────────
+        self._section("Financial Statement Analysis")
+        ctk.CTkLabel(
+            self.detail_panel,
+            text="Optional — upload a MoMo or bank statement for AI loan sizing. "
+                 "Skip if the borrower has no digital account.",
+            font=FONTS["caption"],
+            text_color=COLORS["text_muted"],
+            wraplength=300,
+            justify="left",
+        ).pack(anchor="w", padx=20, pady=(0, 8))
+
+        def _on_statement_accepted(principal: float, duration: int, ceiling):
+            self.principal_entry.delete(0, "end")
+            self.principal_entry.insert(0, str(int(principal)))
+            self.duration_entry.delete(0, "end")
+            self.duration_entry.insert(0, str(int(duration)))
+            self._update_interest_preview()
+
+        stmt_frame = ctk.CTkFrame(self.detail_panel, fg_color="transparent")
+        stmt_frame.pack(fill="x", padx=20, pady=(0, 8))
+        stmt_frame.columnconfigure(0, weight=1)
+
+        self.statement_widget = StatementAnalysisWidget(
+            stmt_frame,
+            on_accept=_on_statement_accepted,
+            current_user=self.current_user,
+        )
+        self.statement_widget.grid(row=0, column=0, sticky="ew")
+
+     
         # ── Collateral ─────────────────────────────────────────────────────
         self._section("Collateral Documents")
         ctk.CTkLabel(self.detail_panel,
@@ -1018,6 +1050,30 @@ class LoansScreen(ctk.CTkFrame):
 
             self.loan_form_error.configure(text="")
             self._collateral_files = []
+            # Save statement analysis to DB (optional — never blocks submission)
+            try:
+                if hasattr(self, "statement_widget"):
+                    stmt_result    = self.statement_widget.get_statement_result()
+                    ceiling_result = self.statement_widget.get_ceiling_result()
+                    if stmt_result and stmt_result.source_type not in ("error", "unknown", None):
+                        from app.core.models.statement_analysis import StatementAnalysis
+                        with get_db() as db:
+                            db.add(StatementAnalysis(
+                                loan_id             = loan.id,
+                                source_file         = self.statement_widget._file_path or "",
+                                statement_type      = stmt_result.source_type,
+                                months_covered      = stmt_result.months_covered,
+                                avg_monthly_income  = float(stmt_result.avg_monthly_income),
+                                avg_monthly_expense = float(stmt_result.avg_monthly_expense),
+                                net_monthly_flow    = float(stmt_result.net_monthly_flow),
+                                income_consistency  = stmt_result.income_consistency,
+                                recommended_ceiling = float(ceiling_result.recommended_ceiling) if ceiling_result else 0,
+                                affordability_score = ceiling_result.affordability_score if ceiling_result else 0,
+                                created_by_id       = self.current_user.id if self.current_user else None,
+                            ))
+                            db.commit()
+            except Exception:
+                pass
             self.found_client_id   = None
             self._load_loans()
             self._show_empty_state()
