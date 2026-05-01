@@ -29,16 +29,16 @@ from app.ui.styles.theme import COLORS, FONTS, SIDEBAR_WIDTH
 # ── Nav item definitions ───────────────────────────────────────────────────────
 # (screen_name, icon_filename, display_label)
 NAV_ITEMS = [
-    ("dashboard",  "home.svg",           "Dashboard"),
-    ("clients",    "users.svg",          "Clients"),
-    ("loans",      "dollar-sign.svg",    "Loans"),
-    ("repayments", "credit-card.svg",    "Repayments"),
-    ("agent",      "cpu.svg",            "AI Agent"),
-    ("chatbot",    "message-circle.svg", "AI Chatbot"),
-    ("reports",    "bar-chart-2.svg",    "Reports"),
-    ("users",      "key.svg",            "Users"),
-    ("logs",       "clipboard.svg",      "Activity Logs"),
-    ("settings",   "settings.svg",       "Settings"),
+    ("dashboard",  "home.png",           "Dashboard"),
+    ("clients",    "users.png",          "Clients"),
+    ("loans",      "dollar-sign.png",    "Loans"),
+    ("repayments", "credit-card.png",    "Repayments"),
+    ("agent",      "cpu.png",            "AI Agent"),
+    ("chatbot",    "message-circle.png", "AI Chatbot"),
+    ("reports",    "bar-chart-2.png",    "Reports"),
+    ("users",      "key.png",            "Users"),
+    ("logs",       "clipboard.png",      "Activity Logs"),
+    ("settings",   "settings.png",       "Settings"),
 ]
 
 ICON_DIR  = "assets/icons"
