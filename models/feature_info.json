@@ -1,0 +1,55 @@
+{
+  "feature_names": [
+    "principal_amount",
+    "duration_months",
+    "income_to_loan_ratio",
+    "monthly_income",
+    "loan_type_encoded",
+    "occupation_stability",
+    "previous_loans",
+    "previous_defaults",
+    "previous_completed",
+    "payment_consistency",
+    "days_overdue",
+    "is_repeat_borrower"
+  ],
+  "label_map": {
+    "0": "LOW",
+    "1": "MEDIUM",
+    "2": "HIGH"
+  },
+  "occupation_map": {
+    "Teacher": 3,
+    "Nurse": 3,
+    "Civil Servant": 3,
+    "Accountant": 3,
+    "Police Officer": 3,
+    "Doctor": 3,
+    "Small Business Owner": 2,
+    "Driver": 2,
+    "Mechanic": 2,
+    "Carpenter": 2,
+    "Mason": 2,
+    "Tailor": 2,
+    "Electrician": 2,
+    "Plumber": 2,
+    "Cook": 2,
+    "Salon Operator": 2,
+    "Shopkeeper": 2,
+    "Security Guard": 1,
+    "Boda Boda Rider": 1,
+    "Market Vendor": 1,
+    "Farmer": 1,
+    "Hawker": 1,
+    "Cleaner": 1
+  },
+  "loan_types": [
+    "Business Loan",
+    "School Fees Loan",
+    "Tax Clearance Loan",
+    "Development Loan",
+    "Asset Acquisition Loan"
+  ],
+  "training_records": 200,
+  "cv_accuracy": 0.82
+}

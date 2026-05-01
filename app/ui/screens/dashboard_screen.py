@@ -354,7 +354,7 @@ class DashboardScreen(ctk.CTkFrame):
             hdr, text="✕  Close",
             width=80, height=28,
             fg_color="transparent",
-            hover_color="#00000033",
+            hover_color="#1A5C1E",
             border_width=1, border_color="#FFFFFF",
             text_color="#FFFFFF",
             font=FONTS["caption"], corner_radius=6,
