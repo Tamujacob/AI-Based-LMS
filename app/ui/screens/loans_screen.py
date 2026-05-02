@@ -85,6 +85,10 @@ class ClientPickerDialog(tk.Toplevel):
 
         self._build()
 
+    def refresh(self):
+        import threading
+        threading.Thread(target=self._load_loans, daemon=True).start()    
+
     def _build(self):
         # Header
         hdr = tk.Frame(self, bg=_GREEN_DARK, height=52)
@@ -1155,25 +1159,53 @@ class LoansScreen(ctk.CTkFrame):
     # ── Load loans table ───────────────────────────────────────────────────────
 
     def _load_loans(self, *_args):
-        from app.core.services.loan_service import LoanService
-        from app.core.services.client_service import ClientService
-
-        status = self.status_filter.get() if hasattr(self, "status_filter") else "All"
-        search = self.search_var.get().strip() if hasattr(self, "search_var") else None
-
-        loans = LoanService.get_all_loans(
-            status=None if status == "All" else status,
-            search=search or None)
-        rows = []
-        for loan in loans:
-            client = ClientService.get_client_by_id(loan.client_id)
-            rows.append({
-                "id":          loan.id,
-                "loan_number": loan.loan_number,
-                "client_name": client.full_name if client else "—",
-                "loan_type":   loan.loan_type.value if loan.loan_type else "—",
-                "principal":   f"UGX {float(loan.principal_amount):,.0f}",
-                "status":      loan.status.value.upper(),
-            })
-        if hasattr(self, "table"):
-            self.table.update_rows(rows)
+        """
+        Single JOIN query — fetches loans + client names in ONE DB call.
+        Safe to call from background thread — uses self.after() for UI updates.
+        """
+        try:
+            from app.database.connection import get_db
+            from app.core.models.loan   import Loan, LoanStatus
+            from app.core.models.client import Client
+ 
+            status = self.status_filter.get() if hasattr(self, "status_filter") else "All"
+            search = self.search_var.get().strip() if hasattr(self, "search_var") else None
+ 
+            with get_db() as db:
+                # ONE query with JOIN — no per-client lookups
+                q = (
+                    db.query(
+                        Loan.id,
+                        Loan.loan_number,
+                        Loan.loan_type,
+                        Loan.principal_amount,
+                        Loan.status,
+                        Client.full_name,
+                    )
+                    .join(Client, Loan.client_id == Client.id)
+                )
+                if status and status != "All":
+                    q = q.filter(Loan.status == LoanStatus(status))
+                if search:
+                    q = q.filter(Client.full_name.ilike(f"%{search}%"))
+ 
+                results = q.order_by(Loan.id.desc()).all()
+ 
+            rows = [
+                {
+                    "id":          r.id,
+                    "loan_number": r.loan_number,
+                    "client_name": r.full_name or "—",
+                    "loan_type":   r.loan_type.value if r.loan_type else "—",
+                    "principal":   f"UGX {float(r.principal_amount):,.0f}",
+                    "status":      r.status.value.upper() if r.status else "—",
+                }
+                for r in results
+            ]
+ 
+            # Update table on main thread
+            if hasattr(self, "table"):
+                self.after(0, lambda: self.table.update_rows(rows))
+ 
+        except Exception as e:
+            print(f"[LoansScreen] Error loading loans: {e}")

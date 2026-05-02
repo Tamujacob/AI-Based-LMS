@@ -1,33 +1,21 @@
 """
 app/ui/components/sidebar.py
 ─────────────────────────────
-Sidebar navigation using real Feather Icons SVGs from assets/icons/.
+Sidebar navigation using colourful PNG icons from assets/icons/.
 
-Requirements:
-    pip install cairosvg pillow
+Icons are loaded AS-IS (no colour tinting) so they keep their
+original vivid colours. Active item gets a gold background.
+Inactive items show the icon at reduced opacity for a polished look.
 
-Icon files expected in assets/icons/:
-    home.svg            → Dashboard
-    users.svg           → Clients
-    dollar-sign.svg     → Loans
-    credit-card.svg     → Repayments
-    cpu.svg             → AI Agent
-    message-circle.svg  → AI Chatbot
-    bar-chart-2.svg     → Reports
-    key.svg             → Users
-    clipboard.svg       → Activity Logs
-    settings.svg        → Settings
-    log-out.svg         → Logout
+Run generate_icons.py once to create the PNG files.
 """
 
 import os
-import io
 import customtkinter as ctk
-from PIL import Image
+from PIL import Image, ImageEnhance
 from app.ui.styles.theme import COLORS, FONTS, SIDEBAR_WIDTH
 
 # ── Nav item definitions ───────────────────────────────────────────────────────
-# (screen_name, icon_filename, display_label)
 NAV_ITEMS = [
     ("dashboard",  "home.png",           "Dashboard"),
     ("clients",    "users.png",          "Clients"),
@@ -42,77 +30,37 @@ NAV_ITEMS = [
 ]
 
 ICON_DIR  = "assets/icons"
-ICON_SIZE = 20   # rendered size in sidebar (px)
+ICON_SIZE = 22          # display size in sidebar
+RENDER_SZ = ICON_SIZE * 2   # load at 2× for sharpness
 
 
 # ── Icon loader ────────────────────────────────────────────────────────────────
 
-def _hex_to_rgb(hex_color: str) -> tuple:
-    """Convert #RRGGBB to (R, G, B) integers."""
-    h = hex_color.lstrip("#")
-    return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
-
-
-def _load_icon(filename: str, color_hex: str, size: int = ICON_SIZE):
+def _load_icon_raw(filename: str, size: int = RENDER_SZ,
+                   opacity: float = 1.0) -> ctk.CTkImage | None:
     """
-    Load an SVG or PNG icon from assets/icons/, tint it to color_hex,
-    and return a CTkImage ready to use. Returns None if loading fails.
-
-    Rendering strategy:
-      1. SVG  → cairosvg renders to PNG in memory (best quality)
-      2. PNG  → Pillow loads directly
-      3. Fallback → returns None (sidebar shows a text letter instead)
+    Load a PNG icon keeping its original colours.
+    opacity: 1.0 = full colour, 0.55 = dimmed for inactive state.
+    Returns a CTkImage or None if file not found.
     """
     path = os.path.join(ICON_DIR, filename)
     if not os.path.exists(path):
         return None
-
-    render_size = size * 2   # render at 2× for HiDPI sharpness
-
     try:
-        ext = os.path.splitext(filename)[1].lower()
+        img = Image.open(path).convert("RGBA").resize(
+            (size, size), Image.LANCZOS)
 
-        if ext == ".svg":
-            try:
-                import cairosvg
-                png_bytes = cairosvg.svg2png(
-                    url=path,
-                    output_width=render_size,
-                    output_height=render_size,
-                )
-                img = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
-            except ImportError:
-                # cairosvg not installed — try loading as PNG with same name
-                png_path = path.replace(".svg", ".png")
-                if os.path.exists(png_path):
-                    img = Image.open(png_path).convert("RGBA").resize(
-                        (render_size, render_size), Image.LANCZOS)
-                else:
-                    return None
-
-        elif ext in (".png", ".jpg", ".jpeg"):
-            img = Image.open(path).convert("RGBA").resize(
-                (render_size, render_size), Image.LANCZOS)
-        else:
-            return None
-
-        # ── Tint: replace RGB channels with target colour ──────────────────
-        # Alpha channel is preserved so the icon shape stays intact.
-        r_t, g_t, b_t = _hex_to_rgb(color_hex)
-        r, g, b, a    = img.split()
-        tinted = Image.merge("RGBA", (
-            Image.new("L", img.size, r_t),
-            Image.new("L", img.size, g_t),
-            Image.new("L", img.size, b_t),
-            a,
-        ))
+        if opacity < 1.0:
+            # Reduce alpha channel to create dimmed effect
+            r, g, b, a = img.split()
+            a = a.point(lambda p: int(p * opacity))
+            img = Image.merge("RGBA", (r, g, b, a))
 
         return ctk.CTkImage(
-            light_image=tinted,
-            dark_image=tinted,
-            size=(size, size),
+            light_image=img,
+            dark_image=img,
+            size=(ICON_SIZE, ICON_SIZE),
         )
-
     except Exception as e:
         print(f"[Sidebar] Could not load icon '{filename}': {e}")
         return None
@@ -135,11 +83,11 @@ class Sidebar(ctk.CTkFrame):
         self.on_navigate    = on_navigate
         self.current_user   = current_user
 
-        # Pre-load all icon variants once at build time
-        self._icons_inactive       = {}
-        self._icons_active         = {}
-        self._icon_logout_inactive = None
-        self._icon_logout_active   = None
+        # Pre-load icon variants
+        self._icons_full   = {}   # full colour (active / hover)
+        self._icons_dim    = {}   # dimmed (inactive)
+        self._logout_full  = None
+        self._logout_dim   = None
         self._preload_icons()
 
         self._build()
@@ -147,19 +95,13 @@ class Sidebar(ctk.CTkFrame):
     # ── Icon preloading ────────────────────────────────────────────────────────
 
     def _preload_icons(self):
-        """Load and tint all icons once. Active = gold text, inactive = sidebar text."""
-        inactive_hex = COLORS.get("sidebar_text", "#C8E6C9")
-        active_hex   = COLORS.get("text_on_gold", "#1A2E1A")
-        gold_hex     = COLORS.get("accent_gold",  "#D4A820")
-
-        all_files = [item[1] for item in NAV_ITEMS] + ["log-out.svg"]
+        all_files = [item[1] for item in NAV_ITEMS] + ["log-out.png"]
         for filename in all_files:
-            self._icons_inactive[filename] = _load_icon(filename, inactive_hex)
-            self._icons_active[filename]   = _load_icon(filename, active_hex)
+            self._icons_full[filename] = _load_icon_raw(filename, opacity=1.0)
+            self._icons_dim[filename]  = _load_icon_raw(filename, opacity=0.55)
 
-        # Logout icon uses gold when inactive, active-text when hovered
-        self._icon_logout_inactive = _load_icon("log-out.svg", gold_hex)
-        self._icon_logout_active   = _load_icon("log-out.svg", active_hex)
+        self._logout_full = self._icons_full.get("log-out.png")
+        self._logout_dim  = self._icons_dim.get("log-out.png")
 
     # ── Build ──────────────────────────────────────────────────────────────────
 
@@ -213,32 +155,24 @@ class Sidebar(ctk.CTkFrame):
             self, fg_color=COLORS["accent_gold"],
             height=2, corner_radius=0,
         ).pack(fill="x")
-        ctk.CTkFrame(self, fg_color="transparent", height=6).pack()
+        ctk.CTkFrame(self, fg_color="transparent", height=4).pack()
 
         # ── Scrollable nav ────────────────────────────────────────────────
         nav_scroll = ctk.CTkScrollableFrame(
             self, fg_color="transparent",
             scrollbar_button_color=COLORS["sidebar_hover"],
         )
-        nav_scroll.pack(fill="both", expand=True, padx=8)
+        nav_scroll.pack(fill="both", expand=True, padx=6)
 
         for screen_name, icon_file, label in NAV_ITEMS:
-            # Restrict Users and Logs to admin / manager only
             if screen_name in ("users", "logs") and self.current_user:
                 if self.current_user.role.value == "loan_officer":
                     continue
 
-            is_active  = screen_name == self.current_screen
-            icon_image = (
-                self._icons_active.get(icon_file)
-                if is_active else
-                self._icons_inactive.get(icon_file)
-            )
-
+            is_active = screen_name == self.current_screen
             self._nav_row(
                 parent      = nav_scroll,
                 screen_name = screen_name,
-                icon_image  = icon_image,
                 icon_file   = icon_file,
                 label       = label,
                 is_active   = is_active,
@@ -253,7 +187,7 @@ class Sidebar(ctk.CTkFrame):
         # ── Current user info ─────────────────────────────────────────────
         if self.current_user:
             user_frame = ctk.CTkFrame(self, fg_color="transparent")
-            user_frame.pack(fill="x", padx=16, pady=(8, 4))
+            user_frame.pack(fill="x", padx=16, pady=(8, 2))
             ctk.CTkLabel(
                 user_frame,
                 text=self.current_user.full_name,
@@ -274,15 +208,14 @@ class Sidebar(ctk.CTkFrame):
             self, fg_color="transparent",
             corner_radius=8, cursor="hand2",
         )
-        logout_frame.pack(fill="x", padx=10, pady=(4, 14))
+        logout_frame.pack(fill="x", padx=8, pady=(4, 12))
 
-        # Use real icon or fallback to arrow text
-        if self._icon_logout_inactive:
+        if self._logout_dim:
             logout_icon_lbl = ctk.CTkLabel(
                 logout_frame,
-                image=self._icon_logout_inactive,
+                image=self._logout_dim,
                 text="",
-                width=38,
+                width=36,
                 anchor="center",
             )
         else:
@@ -291,7 +224,7 @@ class Sidebar(ctk.CTkFrame):
                 text="→",
                 font=FONTS["nav"],
                 text_color=COLORS["accent_gold"],
-                width=38,
+                width=36,
                 anchor="center",
             )
         logout_icon_lbl.pack(side="left", padx=(8, 0), pady=8)
@@ -305,87 +238,88 @@ class Sidebar(ctk.CTkFrame):
         )
         logout_lbl.pack(side="left", fill="x", expand=True, padx=(6, 8), pady=8)
 
+        def logout_enter(_e):
+            logout_frame.configure(fg_color=COLORS["sidebar_hover"])
+            if self._logout_full:
+                logout_icon_lbl.configure(image=self._logout_full)
+
+        def logout_leave(_e):
+            logout_frame.configure(fg_color="transparent")
+            if self._logout_dim:
+                logout_icon_lbl.configure(image=self._logout_dim)
+
         for widget in (logout_frame, logout_icon_lbl, logout_lbl):
             widget.bind("<Button-1>", lambda e: self.on_navigate("logout"))
-            widget.bind("<Enter>",    lambda e: logout_frame.configure(
-                fg_color=COLORS["sidebar_hover"]))
-            widget.bind("<Leave>",    lambda e: logout_frame.configure(
-                fg_color="transparent"))
+            widget.bind("<Enter>",    logout_enter)
+            widget.bind("<Leave>",    logout_leave)
 
     # ── Nav row builder ────────────────────────────────────────────────────────
 
-    def _nav_row(self, parent, screen_name: str, icon_image,
+    def _nav_row(self, parent, screen_name: str,
                  icon_file: str, label: str, is_active: bool):
-        """Build a single navigation row with icon + label."""
+        """Build one navigation row — full-colour icon, no tinting."""
+
+        active_bg   = COLORS["accent_gold"]
+        inactive_bg = "transparent"
+        hover_bg    = COLORS["sidebar_hover"]
 
         row = ctk.CTkFrame(
             parent,
-            fg_color=COLORS["accent_gold"] if is_active else "transparent",
+            fg_color=active_bg if is_active else inactive_bg,
             corner_radius=8,
             cursor="hand2",
         )
         row.pack(fill="x", pady=2)
 
-        # ── Icon ───────────────────────────────────────────────────────────
-        if icon_image:
+        # Choose icon variant
+        icon_img = (self._icons_full.get(icon_file)
+                    if is_active else
+                    self._icons_dim.get(icon_file))
+
+        if icon_img:
             icon_lbl = ctk.CTkLabel(
-                row,
-                image=icon_image,
-                text="",
-                width=38,
-                anchor="center",
+                row, image=icon_img, text="",
+                width=36, anchor="center",
             )
         else:
-            # Fallback: first letter of label in the correct colour
             icon_lbl = ctk.CTkLabel(
                 row,
                 text=label[0],
                 font=FONTS["nav"],
-                text_color=(
-                    COLORS["text_on_gold"] if is_active
-                    else COLORS["sidebar_text"]
-                ),
-                width=38,
-                anchor="center",
+                text_color=(COLORS["text_on_gold"] if is_active
+                            else COLORS["sidebar_text"]),
+                width=36, anchor="center",
             )
-        icon_lbl.pack(side="left", padx=(8, 0), pady=8)
+        icon_lbl.pack(side="left", padx=(8, 0), pady=7)
 
-        # ── Label ──────────────────────────────────────────────────────────
         text_lbl = ctk.CTkLabel(
             row,
             text=label,
             font=FONTS["nav"],
-            text_color=(
-                COLORS["text_on_gold"] if is_active
-                else COLORS["sidebar_text"]
-            ),
+            text_color=(COLORS["text_on_gold"] if is_active
+                        else COLORS["sidebar_text"]),
             anchor="w",
         )
-        text_lbl.pack(side="left", fill="x", expand=True, padx=(6, 8), pady=8)
+        text_lbl.pack(side="left", fill="x", expand=True, padx=(6, 8), pady=7)
 
-        # ── Hover bindings — swap icon tint on enter / leave ───────────────
-        active_icon   = self._icons_active.get(icon_file)
-        inactive_icon = self._icons_inactive.get(icon_file)
+        # ── Hover: show full-colour icon on enter, dim on leave ────────────
+        full_icon = self._icons_full.get(icon_file)
+        dim_icon  = self._icons_dim.get(icon_file)
 
         def on_enter(_e):
             if not is_active:
-                row.configure(fg_color=COLORS["sidebar_hover"])
-                if active_icon:
-                    try:
-                        icon_lbl.configure(image=active_icon)
-                    except Exception:
-                        pass
+                row.configure(fg_color=hover_bg)
+                if full_icon:
+                    icon_lbl.configure(image=full_icon)
 
         def on_leave(_e):
             if not is_active:
-                row.configure(fg_color="transparent")
-                if inactive_icon:
-                    try:
-                        icon_lbl.configure(image=inactive_icon)
-                    except Exception:
-                        pass
+                row.configure(fg_color=inactive_bg)
+                if dim_icon:
+                    icon_lbl.configure(image=dim_icon)
 
         for widget in (row, icon_lbl, text_lbl):
-            widget.bind("<Button-1>", lambda e, s=screen_name: self.on_navigate(s))
-            widget.bind("<Enter>",    on_enter)
-            widget.bind("<Leave>",    on_leave)
+            widget.bind("<Button-1>",
+                        lambda e, s=screen_name: self.on_navigate(s))
+            widget.bind("<Enter>", on_enter)
+            widget.bind("<Leave>", on_leave)
