@@ -92,7 +92,7 @@ class DashboardScreen(ctk.CTkFrame):
                       fg_color=COLORS["accent_green"],
                       hover_color=COLORS["accent_green_dark"],
                       text_color="#FFFFFF", corner_radius=8,
-                      command=self.refresh).grid(row=0, column=2, sticky="e")
+                      command=lambda: self.master.force_refresh("dashboard")).grid(row=0, column=2, sticky="e")
 
     def _build_stat_cards(self):
         cf = ctk.CTkFrame(self.content, fg_color="transparent")
@@ -273,44 +273,62 @@ class DashboardScreen(ctk.CTkFrame):
                 ]
 
             # ── Update UI on main thread ───────────────────────────────
-            def _update():
+            def _update(
+                portfolio=portfolio, status_counts=status_counts,
+                overdue_count=overdue_count, client_count=client_count,
+                recent=recent,
+            ):
                 try:
+                    # ── Update stat cards (just text, no rebuild) ──────────
                     self.card_total.update_value(f"UGX {float(portfolio):,.0f}")
                     self.card_active.update_value(str(status_counts.get("active", 0)))
                     self.card_overdue.update_value(str(overdue_count))
                     self.card_clients.update_value(str(client_count))
 
+                    # ── Update status card counts (just text) ──────────────
                     for key, lbl in self.status_labels.items():
                         lbl.configure(text=str(status_counts.get(key, 0)))
 
-                    if self._active_status:
-                        self._show_loans_panel(self._active_status)
+                    # ── Only rebuild activity frame if data changed ─────────
+                    # Compare new receipts vs what is currently displayed
+                    new_receipts = [r[0] for r in recent]
+                    current_receipts = getattr(self, "_last_receipts", None)
 
-                    for w in self.activity_frame.winfo_children():
-                        w.destroy()
-                    self._render_activity_header()
+                    if new_receipts != current_receipts:
+                        self._last_receipts = new_receipts
+                        for w in self.activity_frame.winfo_children():
+                            w.destroy()
+                        self._render_activity_header()
 
-                    if not recent:
-                        ctk.CTkLabel(self.activity_frame,
-                                     text="No repayments recorded yet.",
-                                     font=FONTS["body"],
-                                     text_color=COLORS["text_muted"]).pack(pady=20)
-                    else:
-                        for i, (receipt, amount, pay_date, loan_num) in enumerate(recent):
-                            bg  = COLORS["bg_card"] if i % 2 == 0 else COLORS["bg_input"]
-                            row = ctk.CTkFrame(self.activity_frame, fg_color=bg, height=38)
-                            row.pack(fill="x")
-                            row.pack_propagate(False)
-                            for text, width, color in [
-                                (receipt,                      170, COLORS["text_primary"]),
-                                (loan_num or "—",              140, COLORS["text_secondary"]),
-                                (f"UGX {amount:,.0f}",         130, COLORS["accent_green_dark"]),
-                                (pay_date,                     100, COLORS["text_muted"]),
-                            ]:
-                                ctk.CTkLabel(row, text=text, font=FONTS["body_small"],
-                                             text_color=color, width=width).pack(
-                                    side="left",
-                                    padx=(16 if width == 170 else 0, 0))
+                        if not recent:
+                            ctk.CTkLabel(
+                                self.activity_frame,
+                                text="No repayments recorded yet.",
+                                font=FONTS["body"],
+                                text_color=COLORS["text_muted"],
+                            ).pack(pady=20)
+                        else:
+                            for i, (receipt, amount, pay_date, loan_num) in enumerate(recent):
+                                bg  = COLORS["bg_card"] if i % 2 == 0 else COLORS["bg_input"]
+                                row = ctk.CTkFrame(
+                                    self.activity_frame, fg_color=bg, height=38)
+                                row.pack(fill="x")
+                                row.pack_propagate(False)
+                                for text, width, color in [
+                                    (receipt,              170, COLORS["text_primary"]),
+                                    (loan_num or "—",      140, COLORS["text_secondary"]),
+                                    (f"UGX {amount:,.0f}", 130, COLORS["accent_green_dark"]),
+                                    (pay_date,             100, COLORS["text_muted"]),
+                                ]:
+                                    ctk.CTkLabel(
+                                        row, text=text,
+                                        font=FONTS["body_small"],
+                                        text_color=color,
+                                        width=width,
+                                    ).pack(side="left",
+                                           padx=(16 if width == 170 else 0, 0))
+                    # If data unchanged — show cached widgets as-is (instant)
+
                 except Exception as e:
                     print(f"[Dashboard] UI update error: {e}")
 
