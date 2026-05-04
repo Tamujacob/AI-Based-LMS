@@ -13,6 +13,7 @@ import customtkinter as ctk
 import tkinter as tk
 import os
 import shutil
+import threading 
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from PIL import Image
@@ -84,9 +85,9 @@ class ClientPickerDialog(tk.Toplevel):
         self.geometry(f"520x{height}+{(sw-520)//2}+{(sh-height)//2}")
 
         self._build()
+        threading.Thread(target=self._load_loans, daemon=True).start()
 
     def refresh(self):
-        import threading
         threading.Thread(target=self._load_loans, daemon=True).start()    
 
     def _build(self):
