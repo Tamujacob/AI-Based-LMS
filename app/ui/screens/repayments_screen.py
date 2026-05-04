@@ -905,27 +905,44 @@ class RepaymentsScreen(ctk.CTkFrame):
                 text_color=COLORS["danger"]))
 
     # ── load history ───────────────────────────────────────────────────────────
-
     def _load_history(self, loan_id: int = None):
-        from app.core.services.repayment_service import RepaymentService
-        from app.core.services.loan_service import LoanService
-
-        if loan_id:
-            repayments = RepaymentService.get_repayments_for_loan(loan_id)
-        else:
-            repayments = RepaymentService.get_all_recent_repayments(limit=30)
-
-        all_loans = {l.id: l for l in LoanService.get_all_loans()}
-        rows = []
-        for r in repayments:
-            loan = all_loans.get(r.loan_id)
-            rows.append({
-                "receipt_number": r.receipt_number,
-                "loan_number":    loan.loan_number if loan else "—",
-                "amount":         f"UGX {r.amount:,.0f}",
+        """
+        Fast JOIN query — fetches repayments + loan numbers in ONE call.
+        Safe to call from background thread — uses self.after() for UI.
+        """
+        try:
+            from app.database.connection import get_db
+            from app.core.models.repayment import Repayment
+            from app.core.models.loan import Loan
+ 
+            with get_db() as db:
+                q = (
+                    db.query(
+                        Repayment.receipt_number,
+                        Repayment.amount,
+                        Repayment.payment_date,
+                        Repayment.payment_method,
+                        Loan.loan_number,
+                    )
+                    .join(Loan, Repayment.loan_id == Loan.id)
+                )
+                if loan_id:
+                    q = q.filter(Repayment.loan_id == loan_id)
+ 
+                q = q.order_by(Repayment.payment_date.desc()).limit(50)
+                results = q.all()
+ 
+            rows = [{
+                "receipt_number": r.receipt_number or "—",
+                "loan_number":    r.loan_number or "—",
+                "amount":         f"UGX {float(r.amount):,.0f}",
                 "payment_date":   str(r.payment_date),
-                "method":         r.payment_method.value if r.payment_method else "—",
-            })
-
-        if hasattr(self, "history_table"):
-            self.history_table.update_rows(rows)
+                "method":         r.payment_method.value
+                                  if r.payment_method else "—",
+            } for r in results]
+ 
+            if hasattr(self, "history_table"):
+                self.after(0, lambda: self.history_table.update_rows(rows))
+ 
+        except Exception as e:
+            print(f"[RepaymentsScreen] Load error: {e}")
