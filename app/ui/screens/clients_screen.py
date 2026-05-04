@@ -383,26 +383,48 @@ class ClientsScreen(ctk.CTkFrame):
 
     def _load_clients(self, *args):
         """
-        Loads clients from the database.
-        Safe to call from a background thread — uses self.after()
-        to update the table widget on the main thread.
+        Direct DB query — faster than ClientService.get_all_clients()
+        which loads full ORM objects. This only fetches the 5 columns
+        needed for the table.
+        Safe to call from background thread — uses self.after() for UI.
         """
         try:
-            from app.core.services.client_service import ClientService
-            search  = (self.search_var.get().strip()
-                       if hasattr(self, "search_var") else None)
-            clients = ClientService.get_all_clients(search=search or None)
+            from app.database.connection import get_db
+            from app.core.models.client import Client
+ 
+            search = (self.search_var.get().strip()
+                      if hasattr(self, "search_var") else None)
+ 
+            with get_db() as db:
+                q = db.query(
+                    Client.id,
+                    Client.full_name,
+                    Client.nin,
+                    Client.phone_number,
+                    Client.occupation,
+                ).filter(Client.is_active == True)
+ 
+                if search:
+                    term = f"%{search}%"
+                    from sqlalchemy import or_
+                    q = q.filter(or_(
+                        Client.full_name.ilike(term),
+                        Client.nin.ilike(term),
+                        Client.phone_number.ilike(term),
+                    ))
+ 
+                results = q.order_by(Client.full_name).all()
+ 
             rows = [{
-                "id":           c.id,
-                "full_name":    c.full_name,
-                "nin":          c.nin or "—",
-                "phone_number": c.phone_number,
-                "occupation":   c.occupation or "—",
-            } for c in clients]
-
-            # Update the table on the main thread
+                "id":           r.id,
+                "full_name":    r.full_name or "—",
+                "nin":          r.nin or "—",
+                "phone_number": r.phone_number or "—",
+                "occupation":   r.occupation or "—",
+            } for r in results]
+ 
             if hasattr(self, "table"):
                 self.after(0, lambda: self.table.update_rows(rows))
-
+ 
         except Exception as e:
-            print(f"[ClientsScreen] Error loading clients: {e}")
+            print(f"[ClientsScreen] Load error: {e}")
