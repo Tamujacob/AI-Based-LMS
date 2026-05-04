@@ -63,10 +63,7 @@ class LoanPickerDialog(tk.Toplevel):
         self.geometry(f"580x{height}+{(sw-580)//2}+{(sh-height)//2}")
 
         self._build()
-
-    def refresh(self):
-        import threading
-        threading.Thread(target=self._load_history, daemon=True).start()
+    
         
     def _build(self):
         # Header
@@ -205,6 +202,9 @@ class RepaymentsScreen(ctk.CTkFrame):
         self.found_loan    = None
         self._last_receipt = None
         self._build()
+
+    def refresh(self):                                              # ← ADD HERE
+        threading.Thread(target=self._load_history, daemon=True).start()    
 
     # ── navigation ─────────────────────────────────────────────────────────────
 
