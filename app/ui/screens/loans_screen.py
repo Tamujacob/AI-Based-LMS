@@ -443,7 +443,7 @@ class LoansScreen(ctk.CTkFrame):
 
         filter_row = ctk.CTkFrame(panel, fg_color="transparent")
         filter_row.grid(row=1, column=0, sticky="ew", pady=(12, 12))
-        filter_row.columnconfigure(1, weight=1)
+        filter_row.columnconfigure(2, weight=1)
 
         self.status_filter = ctk.CTkOptionMenu(
             filter_row,
@@ -458,16 +458,24 @@ class LoansScreen(ctk.CTkFrame):
         )
         self.status_filter.grid(row=0, column=0, padx=(0, 8))
 
+        ctk.CTkButton(filter_row, text="🔍 Search loans",
+                      command=self._load_loans,
+                      fg_color=COLORS["bg_input"],
+                      hover_color=COLORS["bg_hover"],
+                      text_color=COLORS["text_primary"],
+                      font=FONTS["body_small"],
+                      width=120).grid(
+                          row=0, column=1, padx=(0, 8))
+
         self.search_var = ctk.StringVar()
-        self.search_var.trace_add("write", lambda *_: self._load_loans())
         ctk.CTkEntry(filter_row, textvariable=self.search_var,
-                     placeholder_text="Search by client name...",
+                     placeholder_text="Loan number, client name, NIN or phone",
                      **input_style()).grid(
-            row=0, column=1, sticky="ew", padx=(0, 8))
+            row=0, column=2, sticky="ew", padx=(0, 8))
 
         ctk.CTkButton(filter_row, text="+ New Loan", width=120,
                       command=self._new_loan_form,
-                      **primary_button_style()).grid(row=0, column=2)
+                      **primary_button_style()).grid(row=0, column=3)
 
         self.table = DataTable(
             panel,
@@ -548,11 +556,11 @@ class LoansScreen(ctk.CTkFrame):
             ("Client",           client.full_name if client else "—"),
             ("Phone",            client.phone_number if client else "—"),
             ("Loan Type",        loan.loan_type.value if loan.loan_type else "—"),
-            ("Principal",        f"UGX {float(loan.principal_amount):,.0f}"),
-            ("Interest (10%)",   f"UGX {float(loan.total_interest):,.0f}"      if loan.total_interest      else "—"),
-            ("Total Repayable",  f"UGX {float(loan.total_repayable):,.0f}"     if loan.total_repayable     else "—"),
-            ("Monthly Install.", f"UGX {float(loan.monthly_installment):,.0f}" if loan.monthly_installment else "—"),
-            ("Duration",         f"{loan.duration_months} months"),
+            ("Principal",              f"UGX {float(loan.principal_amount):,.0f}"),
+            ("Interest (10% monthly)", f"UGX {float(loan.total_interest):,.0f}"      if loan.total_interest      else "—"),
+            ("Total Repayable",        f"UGX {float(loan.total_repayable):,.0f}"     if loan.total_repayable     else "—"),
+            ("Monthly Install.",       f"UGX {float(loan.monthly_installment):,.0f}" if loan.monthly_installment else "—"),
+            ("Duration",               f"{loan.duration_months} months"),
             ("Application Date", str(loan.application_date)  if loan.application_date else "—"),
             ("Approval Date",    str(loan.approval_date)     if loan.approval_date     else "—"),
             ("Due Date",         str(loan.due_date)          if loan.due_date          else "—"),
@@ -974,7 +982,7 @@ class LoansScreen(ctk.CTkFrame):
             if principal <= 0 or months <= 0:
                 self.interest_preview.configure(text="")
                 return
-            interest = principal * 0.10
+            interest = principal * 0.10 * months
             total    = principal + interest
             monthly  = total / months
             self.interest_preview.configure(
@@ -1179,7 +1187,10 @@ class LoansScreen(ctk.CTkFrame):
                     params["status"] = status
  
                 if search:
-                    conditions.append("c.full_name ILIKE :search")
+                    conditions.append(
+                        "(c.full_name ILIKE :search OR l.loan_number ILIKE :search "
+                        "OR c.nin ILIKE :search OR c.phone_number ILIKE :search)"
+                    )
                     params["search"] = f"%{search}%"
  
                 where = " AND ".join(conditions)

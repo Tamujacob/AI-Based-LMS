@@ -130,6 +130,8 @@ class Loan(Base):
         if principal <= 0:
             raise ValueError("Principal amount must be greater than zero.")
 
+        # Use monthly interest over the full loan term.
+        # A 10% monthly rate means interest is principal * rate * months.
         self.total_interest      = principal * rate * months
         self.total_repayable     = principal + self.total_interest
         self.monthly_installment = self.total_repayable / months

@@ -42,7 +42,7 @@ class AppRoot(ctk.CTk):
         self._last_refresh       = {}      # name → timestamp of last refresh
         self._transition_pending = False
 
-        self.show_screen("login")
+        self.after(100, lambda: self.show_screen("login"))
 
     # ── Window sizing ──────────────────────────────────────────────────────────
 
