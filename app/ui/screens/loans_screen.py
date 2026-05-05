@@ -459,7 +459,7 @@ class LoansScreen(ctk.CTkFrame):
         self.status_filter.grid(row=0, column=0, padx=(0, 8))
 
         ctk.CTkButton(filter_row, text="🔍 Search loans",
-                      command=self._load_loans,
+                      command=self._perform_search,
                       fg_color=COLORS["bg_input"],
                       hover_color=COLORS["bg_hover"],
                       text_color=COLORS["text_primary"],
@@ -468,8 +468,10 @@ class LoansScreen(ctk.CTkFrame):
                           row=0, column=1, padx=(0, 8))
 
         self.search_var = ctk.StringVar()
+        self._last_search_value = ""
+        self.search_var.trace_add("write", self._on_search_change)
         ctk.CTkEntry(filter_row, textvariable=self.search_var,
-                     placeholder_text="Loan number, client name, NIN or phone",
+                     placeholder_text="🔍  Type loan number, client name, NIN or phone...",
                      **input_style()).grid(
             row=0, column=2, sticky="ew", padx=(0, 8))
 
@@ -1227,3 +1229,21 @@ class LoansScreen(ctk.CTkFrame):
  
         except Exception as e:
             print(f"[LoansScreen] Load error: {e}")
+
+    # ── Search handling ───────────────────────────────────────────────────────
+
+    def _perform_search(self):
+        """Handle search button click - search if text entered, show all if empty."""
+        search_text = self.search_var.get().strip()
+        if search_text:
+            self._load_loans()
+        else:
+            self._load_loans()
+
+    def _on_search_change(self, *_args):
+        """Handle search field changes - show all loans when field becomes empty."""
+        current_value = self.search_var.get().strip()
+        if not current_value and self._last_search_value:
+            # Field was cleared, show all loans
+            self._load_loans()
+        self._last_search_value = current_value

@@ -73,16 +73,25 @@ class ClientsScreen(ctk.CTkFrame):
 
         search_row = ctk.CTkFrame(panel, fg_color="transparent")
         search_row.grid(row=1, column=0, sticky="ew", pady=(0, 12))
-        search_row.columnconfigure(0, weight=1)
+        search_row.columnconfigure(1, weight=1)
+
+        ctk.CTkButton(search_row, text="🔍 Search clients",
+                      command=self._perform_client_search,
+                      fg_color=COLORS["bg_input"],
+                      hover_color=COLORS["bg_hover"],
+                      text_color=COLORS["text_primary"],
+                      font=FONTS["body_small"],
+                      width=130).grid(row=0, column=0, padx=(0, 8))
 
         self.search_var = ctk.StringVar()
-        self.search_var.trace_add("write", lambda *a: self._load_clients())
+        self._last_client_search_value = ""
+        self.search_var.trace_add("write", self._on_client_search_change)
         ctk.CTkEntry(search_row, textvariable=self.search_var,
-                     placeholder_text="🔍  Search by name, NIN or phone...",
-                     **input_style()).grid(row=0, column=0, sticky="ew")
+                     placeholder_text="Name, NIN or phone number",
+                     **input_style()).grid(row=0, column=1, sticky="ew", padx=(0, 8))
         ctk.CTkButton(search_row, text="+ Add Client", width=130,
                       command=self._new_client_form,
-                      **primary_button_style()).grid(row=0, column=1, padx=(8, 0))
+                      **primary_button_style()).grid(row=0, column=2, padx=(0, 0))
 
         self.table = DataTable(
             panel,
@@ -429,4 +438,22 @@ class ClientsScreen(ctk.CTkFrame):
  
         except Exception as e:
             print(f"[ClientsScreen] Load error: {e}")
+
+    # ── Search handling ───────────────────────────────────────────────────────
+
+    def _perform_client_search(self):
+        """Handle search button click - search if text entered, show all if empty."""
+        search_text = self.search_var.get().strip()
+        if search_text:
+            self._load_clients()
+        else:
+            self._load_clients()
+
+    def _on_client_search_change(self, *_args):
+        """Handle search field changes - show all clients when field becomes empty."""
+        current_value = self.search_var.get().strip()
+        if not current_value and self._last_client_search_value:
+            # Field was cleared, show all clients
+            self._load_clients()
+        self._last_client_search_value = current_value
  
