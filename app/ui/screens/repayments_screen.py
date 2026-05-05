@@ -906,40 +906,49 @@ class RepaymentsScreen(ctk.CTkFrame):
 
     # ── load history ───────────────────────────────────────────────────────────
     def _load_history(self, loan_id: int = None):
-        """
-        Fast JOIN query — fetches repayments + loan numbers in ONE call.
-        Safe to call from background thread — uses self.after() for UI.
-        """
         try:
             from app.database.connection import get_db
-            from app.core.models.repayment import Repayment
-            from app.core.models.loan import Loan
+            from sqlalchemy import text
  
             with get_db() as db:
-                q = (
-                    db.query(
-                        Repayment.receipt_number,
-                        Repayment.amount,
-                        Repayment.payment_date,
-                        Repayment.payment_method,
-                        Loan.loan_number,
-                    )
-                    .join(Loan, Repayment.loan_id == Loan.id)
-                )
                 if loan_id:
-                    q = q.filter(Repayment.loan_id == loan_id)
+                    sql = text("""
+                        SELECT r.receipt_number,
+                               r.amount,
+                               r.payment_date,
+                               r.payment_method,
+                               l.loan_number
+                        FROM   repayments r
+                        JOIN   loans      l ON r.loan_id = l.id
+                        WHERE  r.loan_id = :loan_id
+                        ORDER  BY r.payment_date DESC
+                        LIMIT  100
+                    """)
+                    result = db.execute(sql, {"loan_id": loan_id})
+                else:
+                    sql = text("""
+                        SELECT r.receipt_number,
+                               r.amount,
+                               r.payment_date,
+                               r.payment_method,
+                               l.loan_number
+                        FROM   repayments r
+                        JOIN   loans      l ON r.loan_id = l.id
+                        ORDER  BY r.payment_date DESC
+                        LIMIT  50
+                    """)
+                    result = db.execute(sql)
  
-                q = q.order_by(Repayment.payment_date.desc()).limit(50)
-                results = q.all()
- 
-            rows = [{
-                "receipt_number": r.receipt_number or "—",
-                "loan_number":    r.loan_number or "—",
-                "amount":         f"UGX {float(r.amount):,.0f}",
-                "payment_date":   str(r.payment_date),
-                "method":         r.payment_method.value
-                                  if r.payment_method else "—",
-            } for r in results]
+                rows = [
+                    {
+                        "receipt_number": r.receipt_number or "—",
+                        "loan_number":    r.loan_number    or "—",
+                        "amount":         f"UGX {float(r.amount):,.0f}",
+                        "payment_date":   str(r.payment_date),
+                        "method":         r.payment_method or "—",
+                    }
+                    for r in result.mappings()
+                ]
  
             if hasattr(self, "history_table"):
                 self.after(0, lambda: self.history_table.update_rows(rows))

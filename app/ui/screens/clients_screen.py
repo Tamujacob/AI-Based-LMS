@@ -380,51 +380,53 @@ class ClientsScreen(ctk.CTkFrame):
             self._show_empty_form_state()
 
     # ── Load table ────────────────────────────────────────────────────────
-
     def _load_clients(self, *args):
-        """
-        Direct DB query — faster than ClientService.get_all_clients()
-        which loads full ORM objects. This only fetches the 5 columns
-        needed for the table.
-        Safe to call from background thread — uses self.after() for UI.
-        """
         try:
             from app.database.connection import get_db
-            from app.core.models.client import Client
+            from sqlalchemy import text
  
             search = (self.search_var.get().strip()
                       if hasattr(self, "search_var") else None)
  
             with get_db() as db:
-                q = db.query(
-                    Client.id,
-                    Client.full_name,
-                    Client.nin,
-                    Client.phone_number,
-                    Client.occupation,
-                ).filter(Client.is_active == True)
- 
                 if search:
-                    term = f"%{search}%"
-                    from sqlalchemy import or_
-                    q = q.filter(or_(
-                        Client.full_name.ilike(term),
-                        Client.nin.ilike(term),
-                        Client.phone_number.ilike(term),
-                    ))
+                    sql = text("""
+                        SELECT id, full_name, nin, phone_number, occupation
+                        FROM clients
+                        WHERE is_active = true
+                          AND (
+                              full_name    ILIKE :term
+                           OR nin          ILIKE :term
+                           OR phone_number ILIKE :term
+                          )
+                        ORDER BY full_name
+                        LIMIT 500
+                    """)
+                    result = db.execute(sql, {"term": f"%{search}%"})
+                else:
+                    sql = text("""
+                        SELECT id, full_name, nin, phone_number, occupation
+                        FROM clients
+                        WHERE is_active = true
+                        ORDER BY full_name
+                        LIMIT 500
+                    """)
+                    result = db.execute(sql)
  
-                results = q.order_by(Client.full_name).all()
- 
-            rows = [{
-                "id":           r.id,
-                "full_name":    r.full_name or "—",
-                "nin":          r.nin or "—",
-                "phone_number": r.phone_number or "—",
-                "occupation":   r.occupation or "—",
-            } for r in results]
+                rows = [
+                    {
+                        "id":           r.id,
+                        "full_name":    r.full_name  or "—",
+                        "nin":          r.nin         or "—",
+                        "phone_number": r.phone_number or "—",
+                        "occupation":   r.occupation  or "—",
+                    }
+                    for r in result.mappings()
+                ]
  
             if hasattr(self, "table"):
                 self.after(0, lambda: self.table.update_rows(rows))
  
         except Exception as e:
             print(f"[ClientsScreen] Load error: {e}")
+ 

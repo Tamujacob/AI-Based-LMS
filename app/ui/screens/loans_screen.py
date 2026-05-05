@@ -1160,53 +1160,59 @@ class LoansScreen(ctk.CTkFrame):
     # ── Load loans table ───────────────────────────────────────────────────────
 
     def _load_loans(self, *_args):
-        """
-        Single JOIN query — fetches loans + client names in ONE DB call.
-        Safe to call from background thread — uses self.after() for UI updates.
-        """
         try:
             from app.database.connection import get_db
-            from app.core.models.loan   import Loan, LoanStatus
-            from app.core.models.client import Client
+            from sqlalchemy import text
  
-            status = self.status_filter.get() if hasattr(self, "status_filter") else "All"
-            search = self.search_var.get().strip() if hasattr(self, "search_var") else None
+            status = (self.status_filter.get()
+                      if hasattr(self, "status_filter") else "All")
+            search = (self.search_var.get().strip()
+                      if hasattr(self, "search_var") else None)
  
             with get_db() as db:
-                # ONE query with JOIN — no per-client lookups
-                q = (
-                    db.query(
-                        Loan.id,
-                        Loan.loan_number,
-                        Loan.loan_type,
-                        Loan.principal_amount,
-                        Loan.status,
-                        Client.full_name,
-                    )
-                    .join(Client, Loan.client_id == Client.id)
-                )
+                # Build raw SQL — much faster than ORM for bulk loads
+                conditions = ["1=1"]
+                params     = {}
+ 
                 if status and status != "All":
-                    q = q.filter(Loan.status == LoanStatus(status))
+                    conditions.append("l.status = :status")
+                    params["status"] = status
+ 
                 if search:
-                    q = q.filter(Client.full_name.ilike(f"%{search}%"))
+                    conditions.append("c.full_name ILIKE :search")
+                    params["search"] = f"%{search}%"
  
-                results = q.order_by(Loan.id.desc()).all()
+                where = " AND ".join(conditions)
+                sql   = text(f"""
+                    SELECT l.id,
+                           l.loan_number,
+                           l.loan_type,
+                           l.principal_amount,
+                           l.status,
+                           c.full_name
+                    FROM   loans   l
+                    JOIN   clients c ON l.client_id = c.id
+                    WHERE  {where}
+                    ORDER  BY l.id DESC
+                    LIMIT  500
+                """)
  
-            rows = [
-                {
-                    "id":          r.id,
-                    "loan_number": r.loan_number,
-                    "client_name": r.full_name or "—",
-                    "loan_type":   r.loan_type.value if r.loan_type else "—",
-                    "principal":   f"UGX {float(r.principal_amount):,.0f}",
-                    "status":      r.status.value.upper() if r.status else "—",
-                }
-                for r in results
-            ]
+                result = db.execute(sql, params)
+                rows   = [
+                    {
+                        "id":          r.id,
+                        "loan_number": r.loan_number,
+                        "client_name": r.full_name     or "—",
+                        "loan_type":   r.loan_type     or "—",
+                        "principal":   f"UGX {float(r.principal_amount):,.0f}",
+                        "status":      (r.status.upper()
+                                        if r.status else "—"),
+                    }
+                    for r in result.mappings()
+                ]
  
-            # Update table on main thread
             if hasattr(self, "table"):
                 self.after(0, lambda: self.table.update_rows(rows))
  
         except Exception as e:
-            print(f"[LoansScreen] Error loading loans: {e}")
+            print(f"[LoansScreen] Load error: {e}")
