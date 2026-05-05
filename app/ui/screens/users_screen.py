@@ -25,6 +25,16 @@ class UsersScreen(ctk.CTkFrame):
         else:
             self.master.show_screen(screen)
 
+    # ── Refresh — called by AppRoot on every return visit ─────────────────
+
+    def refresh(self):
+        """
+        AppRoot calls this every time the user navigates back to Users.
+        Reloads the users table in a background thread — never blocks the UI.
+        Preserves any open form state.
+        """
+        self._load_users()
+
     def _build(self):
         self.columnconfigure(1, weight=1)
         self.rowconfigure(0, weight=1)

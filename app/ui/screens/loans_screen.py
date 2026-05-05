@@ -399,6 +399,13 @@ class LoansScreen(ctk.CTkFrame):
         self.selected_loan     = None
         self._collateral_files = []
         self.found_client_id   = None
+        
+        # Pagination variables
+        self.current_page      = 1
+        self.page_size         = 50
+        self.total_records     = 0
+        self.total_pages       = 1
+        
         self._build()
         self._load_loans()
 
@@ -407,6 +414,16 @@ class LoansScreen(ctk.CTkFrame):
             self.master.logout()
         else:
             self.master.show_screen(screen)
+
+    # ── Refresh — called by AppRoot on every return visit ─────────────────
+
+    def refresh(self):
+        """
+        AppRoot calls this every time the user navigates back to Loans.
+        Reloads the loans table in a background thread — never blocks the UI.
+        Preserves any open form state.
+        """
+        threading.Thread(target=self._load_loans, daemon=True).start()
 
     def _build(self):
         self.columnconfigure(1, weight=1)
@@ -449,7 +466,7 @@ class LoansScreen(ctk.CTkFrame):
             filter_row,
             values=["All", "pending", "approved", "active",
                     "completed", "defaulted", "rejected"],
-            command=lambda _: self._load_loans(),
+            command=self._on_status_change,
             fg_color=COLORS["bg_input"],
             button_color=COLORS["accent_green"],
             button_hover_color=COLORS["accent_green_dark"],
@@ -469,6 +486,7 @@ class LoansScreen(ctk.CTkFrame):
 
         self.search_var = ctk.StringVar()
         self._last_search_value = ""
+        self._search_timer = None  # For debouncing
         self.search_var.trace_add("write", self._on_search_change)
         ctk.CTkEntry(filter_row, textvariable=self.search_var,
                      placeholder_text="🔍  Type loan number, client name, NIN or phone...",
@@ -491,6 +509,41 @@ class LoansScreen(ctk.CTkFrame):
             on_select=self._on_loan_selected,
         )
         self.table.grid(row=2, column=0, sticky="nsew")
+
+        # Pagination controls
+        pagination_frame = ctk.CTkFrame(panel, fg_color="transparent")
+        pagination_frame.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+        pagination_frame.columnconfigure(1, weight=1)
+        
+        self.prev_btn = ctk.CTkButton(
+            pagination_frame, text="◀ Previous", width=100,
+            command=self._prev_page,
+            fg_color=COLORS["bg_input"],
+            hover_color=COLORS["bg_hover"],
+            text_color=COLORS["text_primary"],
+            font=FONTS["body_small"],
+            state="disabled"
+        )
+        self.prev_btn.grid(row=0, column=0, padx=(0, 4))
+        
+        self.page_label = ctk.CTkLabel(
+            pagination_frame,
+            text="Page 1 of 1 (0 records)",
+            font=FONTS["body_small"],
+            text_color=COLORS["text_muted"]
+        )
+        self.page_label.grid(row=0, column=1)
+        
+        self.next_btn = ctk.CTkButton(
+            pagination_frame, text="Next ▶", width=100,
+            command=self._next_page,
+            fg_color=COLORS["bg_input"],
+            hover_color=COLORS["bg_hover"],
+            text_color=COLORS["text_primary"],
+            font=FONTS["body_small"],
+            state="disabled"
+        )
+        self.next_btn.grid(row=0, column=2, padx=(4, 0))
 
     # ── Right: detail / form panel ─────────────────────────────────────────────
 
@@ -1196,6 +1249,27 @@ class LoansScreen(ctk.CTkFrame):
                     params["search"] = f"%{search}%"
  
                 where = " AND ".join(conditions)
+                
+                # Get total count for pagination
+                count_sql = text(f"""
+                    SELECT COUNT(*) as total
+                    FROM loans l
+                    JOIN clients c ON l.client_id = c.id
+                    WHERE {where}
+                """)
+                count_result = db.execute(count_sql, params).scalar()
+                self.total_records = count_result or 0
+                self.total_pages = max(1, (self.total_records + self.page_size - 1) // self.page_size)
+                
+                # Ensure current page is valid
+                if self.current_page > self.total_pages:
+                    self.current_page = self.total_pages
+                if self.current_page < 1:
+                    self.current_page = 1
+                
+                # Calculate offset
+                offset = (self.current_page - 1) * self.page_size
+                
                 sql   = text(f"""
                     SELECT l.id,
                            l.loan_number,
@@ -1207,7 +1281,8 @@ class LoansScreen(ctk.CTkFrame):
                     JOIN   clients c ON l.client_id = c.id
                     WHERE  {where}
                     ORDER  BY l.id DESC
-                    LIMIT  500
+                    LIMIT  {self.page_size}
+                    OFFSET {offset}
                 """)
  
                 result = db.execute(sql, params)
@@ -1226,14 +1301,53 @@ class LoansScreen(ctk.CTkFrame):
  
             if hasattr(self, "table"):
                 self.after(0, lambda: self.table.update_rows(rows))
+                
+            # Update pagination controls
+            self.after(0, self._update_pagination_controls)
  
         except Exception as e:
             print(f"[LoansScreen] Load error: {e}")
+
+    # ── Status filter handling ────────────────────────────────────────────────
+
+    def _on_status_change(self, value):
+        """Handle status filter change - reset to first page."""
+        self.current_page = 1
+        self._load_loans()
+
+    def _prev_page(self):
+        if self.current_page > 1:
+            self.current_page -= 1
+            self._load_loans()
+
+    def _next_page(self):
+        if self.current_page < self.total_pages:
+            self.current_page += 1
+            self._load_loans()
+
+    def _update_pagination_controls(self):
+        # Update page label
+        start_record = (self.current_page - 1) * self.page_size + 1
+        end_record = min(self.current_page * self.page_size, self.total_records)
+        
+        if self.total_records == 0:
+            self.page_label.configure(text="No records found")
+        else:
+            self.page_label.configure(
+                text=f"Page {self.current_page} of {self.total_pages} "
+                     f"({start_record}-{end_record} of {self.total_records} records)"
+            )
+        
+        # Update button states
+        self.prev_btn.configure(state="normal" if self.current_page > 1 else "disabled")
+        self.next_btn.configure(state="normal" if self.current_page < self.total_pages else "disabled")
 
     # ── Search handling ───────────────────────────────────────────────────────
 
     def _perform_search(self):
         """Handle search button click - search if text entered, show all if empty."""
+        # Reset to first page when searching
+        self.current_page = 1
         search_text = self.search_var.get().strip()
         if search_text:
             self._load_loans()
@@ -1241,9 +1355,28 @@ class LoansScreen(ctk.CTkFrame):
             self._load_loans()
 
     def _on_search_change(self, *_args):
-        """Handle search field changes - show all loans when field becomes empty."""
+        """Handle search field changes with debouncing - wait 300ms after user stops typing."""
         current_value = self.search_var.get().strip()
+        
+        # Cancel existing timer
+        if self._search_timer:
+            self.after_cancel(self._search_timer)
+        
+        # If field was cleared, search immediately
         if not current_value and self._last_search_value:
-            # Field was cleared, show all loans
+            self.current_page = 1
             self._load_loans()
+        # If field has content, debounce the search
+        elif current_value:
+            self._search_timer = self.after(300, self._perform_debounced_search)
+        # If field is empty and was empty, do nothing
+        elif not current_value and not self._last_search_value:
+            pass
+            
         self._last_search_value = current_value
+
+    def _perform_debounced_search(self):
+        """Perform search after debounce delay."""
+        self.current_page = 1
+        self._load_loans()
+        self._search_timer = None

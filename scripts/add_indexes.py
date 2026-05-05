@@ -42,6 +42,11 @@ def main():
          "CREATE INDEX IF NOT EXISTS idx_clients_active "
          "ON clients (is_active)"),
 
+        # Composite indexes for search performance
+        ("idx_clients_search",
+         "CREATE INDEX IF NOT EXISTS idx_clients_search "
+         "ON clients (full_name, nin, phone_number) WHERE is_active = true"),
+
         # loans — filtered by status, joined to clients constantly
         ("idx_loans_status",
          "CREATE INDEX IF NOT EXISTS idx_loans_status "
@@ -58,6 +63,15 @@ def main():
         ("idx_loans_loan_number",
          "CREATE INDEX IF NOT EXISTS idx_loans_loan_number "
          "ON loans (loan_number)"),
+
+        # Composite indexes for loans search and filtering
+        ("idx_loans_search",
+         "CREATE INDEX IF NOT EXISTS idx_loans_search "
+         "ON loans (client_id, status, loan_number)"),
+
+        ("idx_loans_status_due_date",
+         "CREATE INDEX IF NOT EXISTS idx_loans_status_due_date "
+         "ON loans (status, due_date) WHERE status = 'active'"),
 
         # repayments — joined to loans, sorted by date
         ("idx_repayments_loan_id",

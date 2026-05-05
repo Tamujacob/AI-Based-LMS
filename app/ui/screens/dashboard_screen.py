@@ -216,7 +216,7 @@ class DashboardScreen(ctk.CTkFrame):
     def _fetch_and_update(self):
         """
         ONE background thread does ALL database work.
-        No sequential queries — everything fetched in one pass.
+        Optimized: Single query with CTEs for all dashboard metrics.
         UI updated via self.after() on the main thread.
         """
         try:
@@ -224,53 +224,86 @@ class DashboardScreen(ctk.CTkFrame):
             from app.core.models.loan       import Loan, LoanStatus
             from app.core.models.client     import Client
             from app.core.models.repayment  import Repayment
-            from sqlalchemy                 import func
+            from sqlalchemy                 import func, text
 
             with get_db() as db:
-                # ── All counts in ONE query each ───────────────────────
-                status_counts = dict(
-                    db.query(Loan.status, func.count(Loan.id))
-                      .group_by(Loan.status)
-                      .all()
-                )
-                # Convert enum keys to string
-                status_counts = {
-                    k.value if hasattr(k, "value") else str(k): v
-                    for k, v in status_counts.items()
-                }
-
-                portfolio = db.query(
-                    func.sum(Loan.principal_amount)
-                ).filter(
-                    Loan.status.in_([LoanStatus.active, LoanStatus.approved])
-                ).scalar() or 0
-
-                overdue_count = db.query(func.count(Loan.id)).filter(
-                    Loan.status == LoanStatus.active,
-                    Loan.due_date < __import__("datetime").date.today(),
-                ).scalar() or 0
-
-                client_count = db.query(func.count(Client.id)).scalar() or 0
-
-                # ── Recent repayments with loan number — ONE join query ─
-                from app.core.models.repayment import Repayment
-                recent_rows = (
-                    db.query(
-                        Repayment.receipt_number,
-                        Repayment.amount,
-                        Repayment.payment_date,
-                        Loan.loan_number,
+                # ── Single optimized query with CTEs ────────────────────────
+                dashboard_sql = text("""
+                    WITH loan_stats AS (
+                        SELECT 
+                            COUNT(*) as total_loans,
+                            COUNT(CASE WHEN status = 'active' THEN 1 END) as active_loans,
+                            COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_loans,
+                            COUNT(CASE WHEN status = 'approved' THEN 1 END) as approved_loans,
+                            COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_loans,
+                            COUNT(CASE WHEN status = 'defaulted' THEN 1 END) as defaulted_loans,
+                            COUNT(CASE WHEN status = 'rejected' THEN 1 END) as rejected_loans,
+                            SUM(CASE WHEN status IN ('active', 'approved') THEN principal_amount END) as portfolio_value,
+                            COUNT(CASE WHEN status = 'active' AND due_date < CURRENT_DATE THEN 1 END) as overdue_count
+                        FROM loans
+                    ),
+                    client_stats AS (
+                        SELECT COUNT(*) as total_clients FROM clients WHERE is_active = true
+                    ),
+                    recent_repayments AS (
+                        SELECT 
+                            r.receipt_number,
+                            r.amount,
+                            r.payment_date,
+                            l.loan_number
+                        FROM repayments r
+                        JOIN loans l ON r.loan_id = l.id
+                        ORDER BY r.created_at DESC
+                        LIMIT 8
                     )
-                    .join(Loan, Repayment.loan_id == Loan.id)
-                    .order_by(Repayment.created_at.desc())
-                    .limit(8)
-                    .all()
-                )
-                recent = [
-                    (r.receipt_number, float(r.amount),
-                     str(r.payment_date), r.loan_number)
-                    for r in recent_rows
-                ]
+                    SELECT 
+                        ls.*,
+                        cs.total_clients,
+                        rr.receipt_number,
+                        rr.amount,
+                        rr.payment_date,
+                        rr.loan_number
+                    FROM loan_stats ls
+                    CROSS JOIN client_stats cs
+                    LEFT JOIN LATERAL (
+                        SELECT * FROM recent_repayments
+                    ) rr ON true
+                """)
+                
+                result = db.execute(dashboard_sql).fetchall()
+                
+                # Parse results
+                if result:
+                    row = result[0]
+                    status_counts = {
+                        'active': row.active_loans or 0,
+                        'pending': row.pending_loans or 0,
+                        'approved': row.approved_loans or 0,
+                        'completed': row.completed_loans or 0,
+                        'defaulted': row.defaulted_loans or 0,
+                        'rejected': row.rejected_loans or 0,
+                    }
+                    
+                    portfolio = float(row.portfolio_value or 0)
+                    overdue_count = row.overdue_count or 0
+                    client_count = row.total_clients or 0
+                    
+                    # Get recent repayments (multiple rows)
+                    recent = []
+                    for r in result:
+                        if r.receipt_number:
+                            recent.append((
+                                r.receipt_number,
+                                float(r.amount),
+                                str(r.payment_date),
+                                r.loan_number
+                            ))
+                else:
+                    status_counts = {status: 0 for status in ['active', 'pending', 'approved', 'completed', 'defaulted', 'rejected']}
+                    portfolio = 0
+                    overdue_count = 0
+                    client_count = 0
+                    recent = []
 
             # ── Update UI on main thread ───────────────────────────────
             def _update(

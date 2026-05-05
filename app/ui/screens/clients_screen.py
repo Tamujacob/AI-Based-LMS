@@ -22,6 +22,13 @@ class ClientsScreen(ctk.CTkFrame):
         self.master = master
         self.current_user = master.current_user
         self.selected_client = None
+        
+        # Pagination variables
+        self.current_page = 1
+        self.page_size = 50
+        self.total_records = 0
+        self.total_pages = 1
+        
         self._build()
         # Load data in background so UI appears instantly
         threading.Thread(target=self._load_clients, daemon=True).start()
@@ -85,6 +92,7 @@ class ClientsScreen(ctk.CTkFrame):
 
         self.search_var = ctk.StringVar()
         self._last_client_search_value = ""
+        self._search_timer = None  # For debouncing
         self.search_var.trace_add("write", self._on_client_search_change)
         ctk.CTkEntry(search_row, textvariable=self.search_var,
                      placeholder_text="Name, NIN or phone number",
@@ -103,6 +111,41 @@ class ClientsScreen(ctk.CTkFrame):
             ],
             on_select=self._on_client_selected)
         self.table.grid(row=2, column=0, sticky="nsew")
+
+        # Pagination controls
+        pagination_frame = ctk.CTkFrame(panel, fg_color="transparent")
+        pagination_frame.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+        pagination_frame.columnconfigure(1, weight=1)
+        
+        self.prev_btn = ctk.CTkButton(
+            pagination_frame, text="◀ Previous", width=100,
+            command=self._prev_page,
+            fg_color=COLORS["bg_input"],
+            hover_color=COLORS["bg_hover"],
+            text_color=COLORS["text_primary"],
+            font=FONTS["body_small"],
+            state="disabled"
+        )
+        self.prev_btn.grid(row=0, column=0, padx=(0, 4))
+        
+        self.page_label = ctk.CTkLabel(
+            pagination_frame,
+            text="Page 1 of 1 (0 records)",
+            font=FONTS["body_small"],
+            text_color=COLORS["text_muted"]
+        )
+        self.page_label.grid(row=0, column=1)
+        
+        self.next_btn = ctk.CTkButton(
+            pagination_frame, text="Next ▶", width=100,
+            command=self._next_page,
+            fg_color=COLORS["bg_input"],
+            hover_color=COLORS["bg_hover"],
+            text_color=COLORS["text_primary"],
+            font=FONTS["body_small"],
+            state="disabled"
+        )
+        self.next_btn.grid(row=0, column=2, padx=(4, 0))
 
     # ── Right: Form Panel ──────────────────────────────────────────────────
 
@@ -399,6 +442,19 @@ class ClientsScreen(ctk.CTkFrame):
  
             with get_db() as db:
                 if search:
+                    # Get total count for pagination
+                    count_sql = text("""
+                        SELECT COUNT(*) as total
+                        FROM clients
+                        WHERE is_active = true
+                          AND (
+                              full_name    ILIKE :term
+                           OR nin          ILIKE :term
+                           OR phone_number ILIKE :term
+                          )
+                    """)
+                    count_result = db.execute(count_sql, {"term": f"%{search}%"}).scalar()
+                    
                     sql = text("""
                         SELECT id, full_name, nin, phone_number, occupation
                         FROM clients
@@ -409,18 +465,38 @@ class ClientsScreen(ctk.CTkFrame):
                            OR phone_number ILIKE :term
                           )
                         ORDER BY full_name
-                        LIMIT 500
+                        LIMIT :limit OFFSET :offset
                     """)
-                    result = db.execute(sql, {"term": f"%{search}%"})
+                    params = {"term": f"%{search}%", "limit": self.page_size, "offset": (self.current_page - 1) * self.page_size}
+                    result = db.execute(sql, params)
                 else:
+                    # Get total count for pagination
+                    count_sql = text("""
+                        SELECT COUNT(*) as total
+                        FROM clients
+                        WHERE is_active = true
+                    """)
+                    count_result = db.execute(count_sql).scalar()
+                    
                     sql = text("""
                         SELECT id, full_name, nin, phone_number, occupation
                         FROM clients
                         WHERE is_active = true
                         ORDER BY full_name
-                        LIMIT 500
+                        LIMIT :limit OFFSET :offset
                     """)
-                    result = db.execute(sql)
+                    params = {"limit": self.page_size, "offset": (self.current_page - 1) * self.page_size}
+                    result = db.execute(sql, params)
+                
+                # Update pagination info
+                self.total_records = count_result or 0
+                self.total_pages = max(1, (self.total_records + self.page_size - 1) // self.page_size)
+                
+                # Ensure current page is valid
+                if self.current_page > self.total_pages:
+                    self.current_page = self.total_pages
+                if self.current_page < 1:
+                    self.current_page = 1
  
                 rows = [
                     {
@@ -435,14 +511,48 @@ class ClientsScreen(ctk.CTkFrame):
  
             if hasattr(self, "table"):
                 self.after(0, lambda: self.table.update_rows(rows))
+                
+            # Update pagination controls
+            self.after(0, self._update_pagination_controls)
  
         except Exception as e:
             print(f"[ClientsScreen] Load error: {e}")
+
+    # ── Pagination methods ───────────────────────────────────────────────────
+
+    def _prev_page(self):
+        if self.current_page > 1:
+            self.current_page -= 1
+            self._load_clients()
+
+    def _next_page(self):
+        if self.current_page < self.total_pages:
+            self.current_page += 1
+            self._load_clients()
+
+    def _update_pagination_controls(self):
+        # Update page label
+        start_record = (self.current_page - 1) * self.page_size + 1
+        end_record = min(self.current_page * self.page_size, self.total_records)
+        
+        if self.total_records == 0:
+            self.page_label.configure(text="No records found")
+        else:
+            self.page_label.configure(
+                text=f"Page {self.current_page} of {self.total_pages} "
+                     f"({start_record}-{end_record} of {self.total_records} records)"
+            )
+        
+        # Update button states
+        self.prev_btn.configure(state="normal" if self.current_page > 1 else "disabled")
+        self.next_btn.configure(state="normal" if self.current_page < self.total_pages else "disabled")
 
     # ── Search handling ───────────────────────────────────────────────────────
 
     def _perform_client_search(self):
         """Handle search button click - search if text entered, show all if empty."""
+        # Reset to first page when searching
+        self.current_page = 1
         search_text = self.search_var.get().strip()
         if search_text:
             self._load_clients()
@@ -450,10 +560,29 @@ class ClientsScreen(ctk.CTkFrame):
             self._load_clients()
 
     def _on_client_search_change(self, *_args):
-        """Handle search field changes - show all clients when field becomes empty."""
+        """Handle search field changes with debouncing - wait 300ms after user stops typing."""
         current_value = self.search_var.get().strip()
+        
+        # Cancel existing timer
+        if self._search_timer:
+            self.after_cancel(self._search_timer)
+        
+        # If field was cleared, search immediately
         if not current_value and self._last_client_search_value:
-            # Field was cleared, show all clients
+            self.current_page = 1
             self._load_clients()
+        # If field has content, debounce the search
+        elif current_value:
+            self._search_timer = self.after(300, self._perform_debounced_client_search)
+        # If field is empty and was empty, do nothing
+        elif not current_value and not self._last_client_search_value:
+            pass
+            
         self._last_client_search_value = current_value
+
+    def _perform_debounced_client_search(self):
+        """Perform search after debounce delay."""
+        self.current_page = 1
+        self._load_clients()
+        self._search_timer = None
  
