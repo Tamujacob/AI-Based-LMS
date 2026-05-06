@@ -175,16 +175,20 @@ class StatementAnalysisWidget(ctk.CTkFrame):
     # ── File handling ──────────────────────────────────────────────────────────
 
     def _upload_statement(self):
-        from tkinter import filedialog
-        path = filedialog.askopenfilename(
-            title="Select Bank or Mobile Money Statement",
-            filetypes=[
-                ("PDF and Images", "*.pdf *.png *.jpg *.jpeg *.bmp *.tiff"),
-                ("PDF files",      "*.pdf"),
-                ("Images",         "*.png *.jpg *.jpeg *.bmp *.tiff"),
-                ("All files",      "*.*"),
-            ],
-        )
+        from app.ui.components.save_dialog import OpenDialog
+
+        filetypes = [
+            ("PDF and Images", "*.pdf *.png *.jpg *.jpeg *.bmp *.tiff"),
+            ("PDF files",      "*.pdf"),
+            ("Images",         "*.png *.jpg *.jpeg *.bmp *.tiff"),
+            ("All files",      "*.*"),
+        ]
+
+        dialog = OpenDialog(self.master, title="Select Bank or Mobile Money Statement",
+                           filetypes=filetypes)
+        self.master.wait_window(dialog)
+
+        path = dialog.result
         if not path:
             return
 
