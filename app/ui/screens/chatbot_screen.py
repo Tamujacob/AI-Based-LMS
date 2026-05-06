@@ -359,7 +359,7 @@ class ChatbotScreen(ctk.CTkFrame):
             result = StatementParser.parse(path)
             self._statement_result = result
 
-            if result.source_type == "error":
+            if result.statement_type == "unknown":
                 error_msg = "; ".join(result.parse_errors)
                 self.after(0, lambda: self._add_message(
                     "assistant",
@@ -407,11 +407,8 @@ class ChatbotScreen(ctk.CTkFrame):
                 state="normal", text="Send"))
 
     def _format_statement_summary(self, result) -> str:
-        """Format a statement result into a readable chat message."""
         lines = [
-            f"📄  Statement Type:     {result.source_type.upper()}",
-            f"👤  Account Holder:    {result.owner_name}",
-            f"📅  Period:            {result.statement_from} → {result.statement_to}",
+            f"📄  Statement Type:     {result.statement_type.upper()}",
             f"📊  Months Covered:    {result.months_covered}",
             f"🔢  Transactions:      {len(result.transactions)}",
             "─" * 40,
@@ -420,11 +417,11 @@ class ChatbotScreen(ctk.CTkFrame):
             "─" * 40,
             f"📈  Avg Monthly In:    UGX {float(result.avg_monthly_income):,.0f}",
             f"📉  Avg Monthly Out:   UGX {float(result.avg_monthly_expense):,.0f}",
-            f"💰  Net Monthly Flow:  UGX {float(result.net_monthly_flow):,.0f}",
-            f"📐  Consistency:       {result.income_consistency}",
+            f"💰  Net Monthly Flow:  UGX {float(result.net_cash_flow):,.0f}",
+            f"📐  Consistency:       {result.income_consistency:.0%}",
         ]
-        if result.parse_errors:
-            lines.append("⚠  Warnings: " + "; ".join(result.parse_errors))
+        if result.parse_warnings:
+            lines.append("⚠  Warnings: " + "; ".join(result.parse_warnings))
         return "\n".join(lines)
 
     # ── Message rendering ──────────────────────────────────────────────────────
