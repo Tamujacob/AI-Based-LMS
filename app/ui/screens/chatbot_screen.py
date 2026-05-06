@@ -293,17 +293,20 @@ class ChatbotScreen(ctk.CTkFrame):
 
     def _attach_statement(self):
         """Open file picker and attach a statement PDF or image."""
-        from tkinter import filedialog
-        path = filedialog.askopenfilename(
-            title="Select Bank or MoMo Statement",
-            filetypes=[
-                ("Supported files",
-                 "*.pdf *.png *.jpg *.jpeg *.bmp *.tiff"),
-                ("PDF files",   "*.pdf"),
-                ("Image files", "*.png *.jpg *.jpeg *.bmp *.tiff"),
-                ("All files",   "*.*"),
-            ],
-        )
+        from app.ui.components.save_dialog import OpenDialog
+
+        filetypes = [
+            ("Supported files", "*.pdf *.png *.jpg *.jpeg *.bmp *.tiff"),
+            ("PDF files", "*.pdf"),
+            ("Image files", "*.png *.jpg *.jpeg *.bmp *.tiff"),
+            ("All files", "*.*"),
+        ]
+
+        dialog = OpenDialog(self.master, title="Select Bank or MoMo Statement",
+                           filetypes=filetypes)
+        self.master.wait_window(dialog)
+
+        path = dialog.result
         if not path:
             return
 
