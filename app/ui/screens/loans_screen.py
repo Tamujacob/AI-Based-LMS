@@ -579,6 +579,7 @@ class LoansScreen(ctk.CTkFrame):
             self._render_loan_detail(loan)
 
     def _render_loan_detail(self, loan):
+        self.selected_loan = loan
         for w in self.detail_panel.winfo_children():
             w.destroy()
 
@@ -633,6 +634,7 @@ class LoansScreen(ctk.CTkFrame):
                          anchor="w", wraplength=180).pack(side="left")
 
         self._render_collateral(loan)
+        self._render_repayments(loan)
         self._divider()
 
         btn_frame = ctk.CTkFrame(self.detail_panel, fg_color="transparent")
@@ -721,6 +723,98 @@ class LoansScreen(ctk.CTkFrame):
             ctk.CTkLabel(coll_grid, text=desc[:12], font=FONTS["caption"],
                          text_color=COLORS["text_muted"]).grid(
                 row=1, column=i, padx=4)
+
+    def _render_repayments(self, loan):
+        from app.core.services.repayment_service import RepaymentService
+        repayments = RepaymentService.get_repayments_for_loan(loan.id)
+        if not repayments:
+            return
+        self._divider()
+        ctk.CTkLabel(self.detail_panel, text="Repayment History",
+                     font=FONTS["subheading"],
+                     text_color=COLORS["text_secondary"]).pack(anchor="w", padx=20)
+        for r in repayments:
+            row = ctk.CTkFrame(self.detail_panel, fg_color=COLORS["bg_input"],
+                               corner_radius=6)
+            row.pack(fill="x", padx=20, pady=4)
+            row.columnconfigure(0, weight=1)
+            row.columnconfigure(1, weight=0)
+            
+            # Amount with large, prominent font
+            amount_frame = ctk.CTkFrame(row, fg_color="transparent")
+            amount_frame.grid(row=0, column=0, sticky="w", padx=12, pady=8)
+            ctk.CTkLabel(amount_frame, text=f"UGX {float(r.amount):,.0f}",
+                         font=FONTS["subtitle"],
+                         text_color=COLORS["accent_green"]).pack(side="left", anchor="w")
+            ctk.CTkLabel(amount_frame, text=f"  •  {r.payment_date}",
+                         font=FONTS["body_small"],
+                         text_color=COLORS["text_muted"]).pack(side="left", anchor="w")
+            
+            # View Details button
+            ctk.CTkButton(row, text="View", width=70, height=32,
+                          font=FONTS["body_small"],
+                          fg_color=COLORS["accent_blue"] if hasattr(COLORS, "accent_blue") else COLORS["accent_green"],
+                          hover_color=COLORS.get("accent_blue_dark", COLORS["accent_green_dark"]),
+                          text_color=_WHITE,
+                          command=lambda rep=r: self._show_repayment_detail(rep)).grid(
+                row=0, column=1, sticky="e", padx=12, pady=8)
+
+    def _show_repayment_detail(self, repayment):
+        """Display detailed information about a specific repayment."""
+        for w in self.detail_panel.winfo_children():
+            w.destroy()
+        
+        # Back button
+        back_frame = ctk.CTkFrame(self.detail_panel, fg_color="transparent")
+        back_frame.pack(fill="x", padx=20, pady=(20, 4))
+        ctk.CTkButton(back_frame, text="← Back to Loan", width=140, height=32,
+                      font=FONTS["body_small"],
+                      fg_color=COLORS["bg_input"],
+                      text_color=COLORS["text_primary"],
+                      command=lambda: self._render_loan_detail(self.selected_loan)).pack(side="left")
+        
+        self._divider()
+        
+        # Title
+        ctk.CTkLabel(self.detail_panel, text="Repayment Details",
+                     font=FONTS["subtitle"],
+                     text_color=COLORS["accent_green_dark"]).pack(anchor="w", padx=20, pady=(4, 2))
+        
+        # Receipt Number
+        ctk.CTkLabel(self.detail_panel, text=repayment.receipt_number,
+                     font=FONTS["badge"],
+                     text_color=COLORS["accent_green"]).pack(anchor="w", padx=20, pady=(0, 12))
+        
+        self._divider()
+        
+        details = [
+            ("Amount Paid", f"UGX {float(repayment.amount):,.0f}"),
+            ("Payment Date", str(repayment.payment_date)),
+            ("Payment Method", repayment.payment_method.value if repayment.payment_method else "—"),
+            ("Status", repayment.status.value.upper() if repayment.status else "—"),
+        ]
+        
+        if repayment.transaction_reference:
+            details.append(("Transaction Reference", repayment.transaction_reference))
+        
+        if repayment.notes:
+            details.append(("Notes", repayment.notes))
+        
+        for label, value in details:
+            row = ctk.CTkFrame(self.detail_panel, fg_color="transparent")
+            row.pack(fill="x", padx=20, pady=3)
+            ctk.CTkLabel(row, text=label, font=FONTS["body_small"],
+                         text_color=COLORS["text_muted"],
+                         width=160, anchor="w").pack(side="left")
+            ctk.CTkLabel(row, text=value, font=FONTS["body"],
+                         text_color=COLORS["text_primary"],
+                         anchor="w", wraplength=200).pack(side="left", fill="x", expand=True)
+        
+        self._divider()
+        
+        ctk.CTkButton(self.detail_panel, text="Close",
+                      command=lambda: self._render_loan_detail(self.selected_loan),
+                      **secondary_button_style()).pack(fill="x", padx=20, pady=(0, 20))
 
     # ── New loan form ──────────────────────────────────────────────────────────
 
