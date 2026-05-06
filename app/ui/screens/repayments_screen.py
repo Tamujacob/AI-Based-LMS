@@ -922,7 +922,7 @@ class RepaymentsScreen(ctk.CTkFrame):
                         JOIN   loans      l ON r.loan_id = l.id
                         WHERE  r.loan_id = :loan_id
                         ORDER  BY r.payment_date DESC
-                        LIMIT  100
+                        LIMIT  25
                     """)
                     result = db.execute(sql, {"loan_id": loan_id})
                 else:
@@ -935,7 +935,7 @@ class RepaymentsScreen(ctk.CTkFrame):
                         FROM   repayments r
                         JOIN   loans      l ON r.loan_id = l.id
                         ORDER  BY r.payment_date DESC
-                        LIMIT  50
+                        LIMIT  25
                     """)
                     result = db.execute(sql)
  

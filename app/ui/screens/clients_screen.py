@@ -25,7 +25,7 @@ class ClientsScreen(ctk.CTkFrame):
         
         # Pagination variables
         self.current_page = 1
-        self.page_size = 50
+        self.page_size = 25
         self.total_records = 0
         self.total_pages = 1
         
