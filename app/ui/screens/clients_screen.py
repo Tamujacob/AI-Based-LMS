@@ -215,7 +215,20 @@ class ClientsScreen(ctk.CTkFrame):
 
         self._entry_field("full_name", "Full Name *",       "e.g.  John Mukasa",   data)
         self._entry_field("nin",       "National ID (NIN)", "e.g.  CM12345678AB",  data)
-        self._entry_field("gender",    "Gender",            "Male  or  Female",    data)
+        
+        # Gender — Dropdown
+        self._label("Gender")
+        gender_initial = data.get("gender", "Male")
+        gender_var = ctk.StringVar(value=gender_initial)
+        ctk.CTkOptionMenu(self.form_panel, 
+                          variable=gender_var,
+                          values=["Male", "Female", "Other"],
+                          fg_color=COLORS["bg_input"],
+                          button_color=COLORS["accent_green"],
+                          button_hover_color=COLORS["accent_green_dark"],
+                          text_color=COLORS["text_primary"],
+                          font=FONTS["body_small"]).pack(fill="x", padx=20)
+        self._entries["gender_var"] = gender_var
 
         # Date of Birth — DatePicker
         self._label("Date of Birth")
