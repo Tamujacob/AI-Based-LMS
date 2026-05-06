@@ -639,24 +639,32 @@ class LoansScreen(ctk.CTkFrame):
         btn_frame.pack(fill="x", padx=20, pady=(4, 8))
         btn_frame.columnconfigure(0, weight=1)
         btn_frame.columnconfigure(1, weight=1)
+        btn_frame.columnconfigure(2, weight=1)
 
         if loan.status.value == "pending":
+            ctk.CTkButton(btn_frame, text="✎  Edit",
+                          fg_color=COLORS["accent_gold"],
+                          hover_color=COLORS["accent_gold_dark"],
+                          text_color=_WHITE, font=FONTS["button"],
+                          corner_radius=8, height=38,
+                          command=lambda: self._edit_loan_form(loan)).grid(
+                row=0, column=0, padx=(0, 4), sticky="ew")
             ctk.CTkButton(btn_frame, text="✔  Approve",
                           fg_color=COLORS["accent_green"],
                           hover_color=COLORS["accent_green_dark"],
                           text_color=_WHITE, font=FONTS["button"],
                           corner_radius=8, height=38,
                           command=lambda: self._approve_loan(loan.id)).grid(
-                row=0, column=0, padx=(0, 4), sticky="ew")
+                row=0, column=1, padx=4, sticky="ew")
             ctk.CTkButton(btn_frame, text="✖  Reject",
                           command=lambda: self._reject_loan(loan.id),
                           **danger_button_style()).grid(
-                row=0, column=1, padx=(4, 0), sticky="ew")
+                row=0, column=2, padx=(4, 0), sticky="ew")
         elif loan.status.value == "active":
             ctk.CTkButton(btn_frame, text="💳  Record Payment",
                           command=lambda: self.master.show_screen("repayments"),
                           **primary_button_style()).grid(
-                row=0, column=0, columnspan=2, sticky="ew")
+                row=0, column=0, columnspan=3, sticky="ew")
 
         ctk.CTkButton(self.detail_panel, text="🖨  Print Loan Agreement",
                       height=38, fg_color=COLORS["accent_gold"],
@@ -671,6 +679,11 @@ class LoansScreen(ctk.CTkFrame):
                           command=lambda: self.master.show_screen("agent"),
                           **secondary_button_style()).pack(
                 fill="x", padx=20, pady=(0, 20))
+
+    def _edit_loan_form(self, loan):
+        from app.core.services.loan_service import LoanService
+        loan = LoanService.get_loan_by_id(loan.id)
+        self._new_loan_form(loan=loan)
 
     def _render_collateral(self, loan):
         from app.database.connection import get_db
@@ -711,19 +724,26 @@ class LoansScreen(ctk.CTkFrame):
 
     # ── New loan form ──────────────────────────────────────────────────────────
 
-    def _new_loan_form(self):
-        self.selected_loan     = None
-        self.found_client_id   = None
+    def _new_loan_form(self, loan=None):
+        self.selected_loan     = loan
+        self.found_client_id   = loan.client_id if loan else None
         self._collateral_files = []
         for w in self.detail_panel.winfo_children():
             w.destroy()
 
-        ctk.CTkLabel(self.detail_panel, text="New Loan Application",
+        title_text = "Edit Pending Loan" if loan else "New Loan Application"
+        subtitle_text = (
+            "Update the pending application below and click Save."
+            if loan else
+            "Fill in all required fields (*) then click Submit."
+        )
+
+        ctk.CTkLabel(self.detail_panel, text=title_text,
                      font=FONTS["subtitle"],
                      text_color=COLORS["accent_green_dark"]).pack(
             anchor="w", padx=20, pady=(20, 4))
         ctk.CTkLabel(self.detail_panel,
-                     text="Fill in all required fields (*) then click Submit.",
+                     text=subtitle_text,
                      font=FONTS["body_small"],
                      text_color=COLORS["text_muted"]).pack(
             anchor="w", padx=20, pady=(0, 8))
@@ -743,7 +763,7 @@ class LoansScreen(ctk.CTkFrame):
                      text_color=COLORS["text_muted"],
                      anchor="w").grid(row=0, column=0, sticky="w", padx=(0, 12))
         ctk.CTkLabel(id_inner,
-                     text="Auto-assigned on submission",
+                     text=(loan.loan_number if loan else "Auto-assigned on submission"),
                      font=FONTS["body_small"],
                      text_color=COLORS["text_muted"],
                      anchor="w").grid(row=0, column=1, sticky="w")
@@ -768,13 +788,14 @@ class LoansScreen(ctk.CTkFrame):
         self.client_search_entry.pack(fill="x", padx=20)
         self.client_search_entry.bind("<Return>", lambda e: self._find_client())
 
-        ctk.CTkButton(self.detail_panel, text="🔍  Find Client", height=36,
-                      font=FONTS["button"],
-                      fg_color=COLORS["accent_green"],
-                      hover_color=COLORS["accent_green_dark"],
-                      text_color=_WHITE, corner_radius=8,
-                      command=self._find_client).pack(
-            anchor="w", padx=20, pady=(8, 2))
+        if not loan:
+            ctk.CTkButton(self.detail_panel, text="🔍  Find Client", height=36,
+                          font=FONTS["button"],
+                          fg_color=COLORS["accent_green"],
+                          hover_color=COLORS["accent_green_dark"],
+                          text_color=_WHITE, corner_radius=8,
+                          command=self._find_client).pack(
+                anchor="w", padx=20, pady=(8, 2))
 
         self.client_result_frame = ctk.CTkFrame(
             self.detail_panel, fg_color=COLORS["bg_input"], corner_radius=8)
@@ -785,6 +806,28 @@ class LoansScreen(ctk.CTkFrame):
             font=FONTS["body_small"], text_color=COLORS["text_muted"],
             wraplength=280, justify="left")
         self.client_result_label.pack(padx=12, pady=10, anchor="w")
+
+        if loan:
+            from app.core.services.client_service import ClientService
+            client = ClientService.get_client_by_id(loan.client_id)
+            self.client_search_entry.delete(0, "end")
+            if client:
+                self.client_search_entry.insert(0, client.full_name)
+                self.client_result_label.configure(
+                    text=(
+                        f"✔  {client.full_name}\n"
+                        f"NIN: {client.nin or '—'}  |  "
+                        f"Phone: {client.phone_number or '—'}"
+                    ),
+                    text_color=COLORS["accent_green"],
+                )
+            else:
+                self.client_search_entry.insert(0, str(loan.client_id))
+                self.client_result_label.configure(
+                    text="Client details unavailable.",
+                    text_color=COLORS["danger"],
+                )
+            self.client_search_entry.configure(state="disabled")
 
         # ── Loan details ───────────────────────────────────────────────────
         self._section("Loan Details")
@@ -819,7 +862,10 @@ class LoansScreen(ctk.CTkFrame):
         date_row = ctk.CTkFrame(self.detail_panel, fg_color="transparent")
         date_row.pack(fill="x", padx=20)
         date_row.columnconfigure(0, weight=1)
-        self.application_date_picker = DatePicker(date_row, initial_date=date.today())
+        self.application_date_picker = DatePicker(
+            date_row,
+            initial_date=loan.application_date if loan and loan.application_date else date.today(),
+        )
         self.application_date_picker.grid(row=0, column=0, sticky="ew")
 
         self._flabel("Purpose / Reason")
@@ -833,6 +879,13 @@ class LoansScreen(ctk.CTkFrame):
             self.detail_panel, text="", font=FONTS["body_small"],
             text_color=COLORS["accent_green_dark"])
         self.interest_preview.pack(anchor="w", padx=20, pady=(8, 0))
+
+        if loan:
+            self.loan_type_var.set(loan.loan_type.value if loan.loan_type else LOAN_TYPES[0])
+            self.principal_entry.insert(0, str(int(loan.principal_amount)))
+            self.duration_entry.insert(0, str(loan.duration_months))
+            self.purpose_entry.insert(0, loan.purpose or "")
+            self._update_interest_preview()
 
         # ── Financial Statement Analysis (optional) ────────────────────────
         self._section("Financial Statement Analysis")
@@ -1083,20 +1136,30 @@ class LoansScreen(ctk.CTkFrame):
             return
 
         try:
-            loan = LoanService.create_loan(
-                client_id        = self.found_client_id,
-                loan_type        = self.loan_type_var.get(),
-                principal_amount = principal,
-                duration_months  = duration,
-                purpose          = self.purpose_entry.get().strip() or None,
-                created_by_id    = self.current_user.id if self.current_user else None,
-            )
-
-            with get_db() as db:
-                l = db.query(Loan).filter_by(id=loan.id).first()
-                if l:
-                    l.application_date = self.application_date_picker.get_date()
-                    db.commit()
+            if self.selected_loan and self.selected_loan.status.value == "pending":
+                loan = LoanService.update_loan(
+                    loan_id          = self.selected_loan.id,
+                    loan_type        = self.loan_type_var.get(),
+                    principal_amount = principal,
+                    duration_months  = duration,
+                    purpose          = self.purpose_entry.get().strip() or None,
+                    application_date = self.application_date_picker.get_date(),
+                    updated_by_id    = self.current_user.id if self.current_user else None,
+                )
+            else:
+                loan = LoanService.create_loan(
+                    client_id        = self.found_client_id,
+                    loan_type        = self.loan_type_var.get(),
+                    principal_amount = principal,
+                    duration_months  = duration,
+                    purpose          = self.purpose_entry.get().strip() or None,
+                    created_by_id    = self.current_user.id if self.current_user else None,
+                )
+                with get_db() as db:
+                    l = db.query(Loan).filter_by(id=loan.id).first()
+                    if l:
+                        l.application_date = self.application_date_picker.get_date()
+                        db.commit()
 
             os.makedirs(COLLATERAL_UPLOAD_DIR, exist_ok=True)
             with get_db() as db:
@@ -1144,7 +1207,10 @@ class LoansScreen(ctk.CTkFrame):
                 pass
             self.found_client_id   = None
             self._load_loans()
-            self._show_empty_state()
+            if self.selected_loan and self.selected_loan.status.value == "pending":
+                self._on_loan_selected({"id": loan.id})
+            else:
+                self._show_empty_state()
 
         except Exception as e:
             self.loan_form_error.configure(text=f"⚠  {e}")

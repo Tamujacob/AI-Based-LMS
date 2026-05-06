@@ -152,6 +152,71 @@ class LoanService:
 
     # ── Approval workflow ──────────────────────────────────────────────────────
 
+    # ── Update workflow ──────────────────────────────────────────────────────────
+
+    @staticmethod
+    def update_loan(
+        loan_id: int,
+        loan_type: str,
+        principal_amount,
+        duration_months: int,
+        purpose: str = None,
+        application_date: date = None,
+        updated_by_id: int = None,
+    ) -> Loan:
+        """Update a pending loan application."""
+        clean_principal = _safe_decimal(principal_amount)
+        if clean_principal <= 0:
+            raise ValueError("Principal amount must be greater than zero.")
+
+        try:
+            clean_months = int(str(duration_months).replace(",", "").strip())
+        except (ValueError, TypeError):
+            raise ValueError("Duration must be a whole number of months (e.g. 12).")
+        if clean_months <= 0:
+            raise ValueError("Duration must be at least 1 month.")
+
+        with get_db() as db:
+            loan = db.query(Loan).filter_by(id=loan_id).first()
+            if not loan:
+                raise ValueError(f"Loan #{loan_id} not found.")
+            if loan.status != LoanStatus.pending:
+                raise ValueError("Only pending loans can be edited.")
+
+            old_snapshot = _loan_snapshot(loan)
+            loan.loan_type        = LoanType(loan_type)
+            loan.principal_amount = clean_principal
+            loan.duration_months  = clean_months
+            loan.purpose          = purpose
+            if application_date:
+                loan.application_date = application_date
+            loan.calculate_financials()
+
+            db.commit()
+            db.refresh(loan)
+            new_snapshot = _loan_snapshot(loan)
+            client_id    = loan.client_id
+            loan_number  = loan.loan_number
+            db.expunge(loan)
+
+        client_name = LoanService._client_name(client_id)
+        AuditService.log(
+            action      = Actions.LOAN_UPDATED,
+            user_id     = updated_by_id,
+            entity_type = "Loan",
+            entity_id   = loan_id,
+            description = (
+                f"Loan application updated: {loan_number} "
+                f"| Client: {client_name} "
+                f"| Type: {loan_type} "
+                f"| Principal: UGX {float(clean_principal):,.0f} "
+                f"| Term: {clean_months} months"
+            ),
+            old_value   = old_snapshot,
+            new_value   = new_snapshot,
+        )
+        return loan
+
     @staticmethod
     def approve_loan(loan_id: int, approved_by_id: int = None) -> Loan:
         """Approve a pending loan and set disbursement + due dates."""
