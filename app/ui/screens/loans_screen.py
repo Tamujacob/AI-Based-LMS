@@ -760,35 +760,49 @@ class LoansScreen(ctk.CTkFrame):
                 row=0, column=1, sticky="e", padx=12, pady=8)
 
     def _show_repayment_detail(self, repayment):
-        """Display detailed information about a specific repayment."""
-        for w in self.detail_panel.winfo_children():
-            w.destroy()
+        """Display detailed information about a specific repayment in a modal dialog."""
+        dialog = tk.Toplevel(self.master)
+        dialog.title(f"Repayment Details - {repayment.receipt_number}")
+        dialog.resizable(False, False)
+        dialog.configure(bg=COLORS["bg_primary"])
         
-        # Back button
-        back_frame = ctk.CTkFrame(self.detail_panel, fg_color="transparent")
-        back_frame.pack(fill="x", padx=20, pady=(20, 4))
-        ctk.CTkButton(back_frame, text="← Back to Loan", width=140, height=32,
-                      font=FONTS["body_small"],
-                      fg_color=COLORS["bg_input"],
-                      text_color=COLORS["text_primary"],
-                      command=lambda: self._render_loan_detail(self.selected_loan)).pack(side="left")
+        # Center on screen
+        dialog.geometry("500x450")
+        dialog.update_idletasks()
+        sw, sh = dialog.winfo_screenwidth(), dialog.winfo_screenheight()
+        w, h = 500, 450
+        dialog.geometry(f"{w}x{h}+{(sw-w)//2}+{(sh-h)//2}")
+        dialog.grab_set()
         
-        self._divider()
+        # Main frame with padding
+        main_frame = ctk.CTkFrame(dialog, fg_color=COLORS["bg_primary"])
+        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        main_frame.columnconfigure(0, weight=1)
         
-        # Title
-        ctk.CTkLabel(self.detail_panel, text="Repayment Details",
+        # Receipt number as title
+        ctk.CTkLabel(main_frame, text=repayment.receipt_number,
                      font=FONTS["subtitle"],
-                     text_color=COLORS["accent_green_dark"]).pack(anchor="w", padx=20, pady=(4, 2))
+                     text_color=COLORS["accent_green"]).pack(anchor="w", pady=(0, 12))
         
-        # Receipt Number
-        ctk.CTkLabel(self.detail_panel, text=repayment.receipt_number,
-                     font=FONTS["badge"],
-                     text_color=COLORS["accent_green"]).pack(anchor="w", padx=20, pady=(0, 12))
+        # Divider
+        ctk.CTkFrame(main_frame, height=1, fg_color=COLORS["border"]).pack(
+            fill="x", pady=(0, 12))
         
-        self._divider()
+        # Amount - large and prominent
+        amount_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        amount_frame.pack(fill="x", pady=(0, 12))
+        ctk.CTkLabel(amount_frame, text="Amount Paid",
+                     font=FONTS["body_small"],
+                     text_color=COLORS["text_muted"]).pack(anchor="w")
+        ctk.CTkLabel(amount_frame, text=f"UGX {float(repayment.amount):,.0f}",
+                     font=FONTS["title"],
+                     text_color=COLORS["accent_green"]).pack(anchor="w", pady=(4, 0))
         
+        ctk.CTkFrame(main_frame, height=1, fg_color=COLORS["border"]).pack(
+            fill="x", pady=12)
+        
+        # Details
         details = [
-            ("Amount Paid", f"UGX {float(repayment.amount):,.0f}"),
             ("Payment Date", str(repayment.payment_date)),
             ("Payment Method", repayment.payment_method.value if repayment.payment_method else "—"),
             ("Status", repayment.status.value.upper() if repayment.status else "—"),
@@ -801,20 +815,24 @@ class LoansScreen(ctk.CTkFrame):
             details.append(("Notes", repayment.notes))
         
         for label, value in details:
-            row = ctk.CTkFrame(self.detail_panel, fg_color="transparent")
-            row.pack(fill="x", padx=20, pady=3)
-            ctk.CTkLabel(row, text=label, font=FONTS["body_small"],
+            detail_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+            detail_frame.pack(fill="x", pady=6)
+            ctk.CTkLabel(detail_frame, text=label,
+                         font=FONTS["body_small"],
                          text_color=COLORS["text_muted"],
-                         width=160, anchor="w").pack(side="left")
-            ctk.CTkLabel(row, text=value, font=FONTS["body"],
+                         width=140, anchor="w").pack(side="left")
+            ctk.CTkLabel(detail_frame, text=value,
+                         font=FONTS["body"],
                          text_color=COLORS["text_primary"],
-                         anchor="w", wraplength=200).pack(side="left", fill="x", expand=True)
+                         anchor="w").pack(side="left", fill="x", expand=True, padx=(20, 0))
         
-        self._divider()
+        ctk.CTkFrame(main_frame, height=1, fg_color=COLORS["border"]).pack(
+            fill="x", pady=12)
         
-        ctk.CTkButton(self.detail_panel, text="Close",
-                      command=lambda: self._render_loan_detail(self.selected_loan),
-                      **secondary_button_style()).pack(fill="x", padx=20, pady=(0, 20))
+        # Close button
+        ctk.CTkButton(main_frame, text="Close",
+                      command=dialog.destroy,
+                      **secondary_button_style()).pack(fill="x", pady=(12, 0))
 
     # ── New loan form ──────────────────────────────────────────────────────────
 
