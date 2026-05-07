@@ -149,12 +149,12 @@ class LoanCeilingEngine:
         net_flow      = Decimal("0")
         income_source = "stated"
 
-        if statement_result and hasattr(statement_result, "net_monthly_flow"):
-            net_flow = Decimal(str(statement_result.net_monthly_flow))
+        if statement_result and hasattr(statement_result, "avg_monthly_net"):
+            net_flow = Decimal(str(statement_result.avg_monthly_net))
             income_source = "statement"
 
             # Check for red flags in statement
-            if statement_result.income_consistency == "LOW":
+            if statement_result.income_consistency < 0.5:
                 red_flags.append(
                     "Income is highly irregular — high risk of repayment gaps.")
             if float(net_flow) < 0:

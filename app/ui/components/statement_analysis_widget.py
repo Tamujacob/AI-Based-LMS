@@ -254,8 +254,8 @@ class StatementAnalysisWidget(ctk.CTkFrame):
 
             # Build summary text
             lines = []
-            if parsed and parsed.source_type not in ("error", "unknown"):
-                lines.append(StatementParser.format_result_summary(parsed))
+            if parsed and parsed.statement_type not in ("error", "unknown"):
+                lines.append(parsed.as_text())
                 lines.append("")
             lines.append(ceiling.as_text())
             summary = "\n".join(lines)

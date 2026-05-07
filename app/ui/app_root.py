@@ -236,3 +236,41 @@ class AppRoot(ctk.CTk):
         self.current_user        = None
         self.current_screen_name = None
         self.show_screen("login", force_rebuild=True)
+
+    # ── Proper cleanup to prevent CustomTkinter threading issues ─────────────
+
+    def destroy(self):
+        """
+        Override destroy to properly clean up threads before destroying the window.
+        This prevents CustomTkinter's Tcl command cleanup errors.
+        """
+        # Stop any pending transitions
+        self._transition_pending = True
+
+        # Wait for any running refresh threads to finish
+        # Give them a moment to complete
+        self.after(100)
+
+        # Destroy all cached screens properly
+        for widget in list(self._screen_cache.values()):
+            try:
+                if hasattr(widget, 'destroy'):
+                    widget.destroy()
+            except Exception:
+                pass
+
+        # Clear caches
+        self._screen_cache.clear()
+        self._screen_classes.clear()
+        self._last_refresh.clear()
+
+        # Call parent destroy
+        try:
+            super().destroy()
+        except Exception:
+            # If CustomTkinter has issues, fall back to tkinter destroy
+            try:
+                import tkinter as tk
+                tk.Tk.destroy(self)
+            except Exception:
+                pass
