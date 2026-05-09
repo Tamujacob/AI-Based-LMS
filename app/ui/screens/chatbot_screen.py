@@ -342,49 +342,49 @@ class ChatbotScreen(ctk.CTkFrame):
         self.input_var.set("")
 
     def _parse_statement_and_respond(self, message: str):
-        """
-        Parse the attached statement, calculate the loan ceiling,
-        and send a combined message to the AI.
-        Runs in a background thread.
-        """
         path = self._attached_statement
-
         try:
-            # Step 1 — Update chat to show we're working
             self.after(0, lambda: self._add_system_note(
-                f"📊  Analysing statement: {os.path.basename(path)}..."))
-
-            # Step 2 — Parse the statement
+                f"Analysing statement: {os.path.basename(path)}..."))
+ 
             from app.core.agents.statement_parser import StatementParser
             result = StatementParser.parse(path)
             self._statement_result = result
-
+ 
             if result.statement_type == "unknown":
-                error_msg = "; ".join(result.parse_errors)
+                error_msg = "; ".join(result.parse_warnings)
                 self.after(0, lambda: self._add_message(
                     "assistant",
                     f"I could not read that file.\n\n{error_msg}\n\n"
                     "Please make sure the file is a readable PDF or clear image."
                 ))
                 return
-
-            # Step 3 — Format statement summary for display
-            summary = self._format_statement_summary(result)
-            self.after(0, lambda: self._add_system_note(summary))
-
-            # Step 4 — Calculate loan ceiling
+ 
+            # ── CHANGED: render card instead of monospace text dump ──────────
             from app.core.agents.loan_ceiling_engine import LoanCeilingEngine
             ceiling = LoanCeilingEngine.calculate(statement_result=result)
-            ceiling_text = ceiling.as_text()
-
-            # Step 5 — Build enriched context for AI
+ 
+            def show_card():
+                from app.ui.components.statement_result_card import StatementResultCard
+                card = StatementResultCard(
+                    parent     = self.messages_frame,
+                    result     = result,
+                    ceiling    = ceiling,
+                    on_accept  = self._on_accept_scenario,
+                )
+                card.pack(fill="x", padx=12, pady=6)
+                self._scroll_to_bottom()
+ 
+            self.after(0, show_card)
+            # ── END CHANGED ──────────────────────────────────────────────────
+ 
+            # Build enriched context for Groq
             enriched_context = (
-                f"STATEMENT ANALYSIS RESULTS:\n{summary}\n\n"
-                f"LOAN CEILING CALCULATION:\n{ceiling_text}\n\n"
+                f"STATEMENT ANALYSIS RESULTS:\n{result.as_text()}\n\n"
+                f"LOAN CEILING:\n{ceiling.as_text() if ceiling else 'N/A'}\n\n"
                 f"USER QUESTION: {message}"
             )
-
-            # Step 6 — Send to Groq with statement context
+ 
             from app.core.agents.ai_core import AICore
             response = AICore.chat(
                 message=enriched_context,
@@ -393,10 +393,8 @@ class ChatbotScreen(ctk.CTkFrame):
             self.conversation_history.append(
                 {"role": "assistant", "content": response})
             self.after(0, lambda: self._add_message("assistant", response))
-
-            # Step 7 — Hide attachment bar after processing
             self.after(0, self._remove_attachment)
-
+ 
         except Exception as e:
             self.after(0, lambda: self._add_message(
                 "assistant",
@@ -405,24 +403,36 @@ class ChatbotScreen(ctk.CTkFrame):
         finally:
             self.after(0, lambda: self.send_btn.configure(
                 state="normal", text="Send"))
-
-    def _format_statement_summary(self, result) -> str:
-        lines = [
-            f"📄  Statement Type:     {result.statement_type.upper()}",
-            f"📊  Months Covered:    {result.months_covered}",
-            f"🔢  Transactions:      {len(result.transactions)}",
-            "─" * 40,
-            f"💚  Total Credits:     UGX {float(result.total_credits):,.0f}",
-            f"🔴  Total Debits:      UGX {float(result.total_debits):,.0f}",
-            "─" * 40,
-            f"📈  Avg Monthly In:    UGX {float(result.avg_monthly_income):,.0f}",
-            f"📉  Avg Monthly Out:   UGX {float(result.avg_monthly_expense):,.0f}",
-            f"💰  Net Monthly Flow:  UGX {float(result.net_cash_flow):,.0f}",
-            f"📐  Consistency:       {result.income_consistency:.0%}",
-        ]
-        if result.parse_warnings:
-            lines.append("⚠  Warnings: " + "; ".join(result.parse_warnings))
-        return "\n".join(lines)
+ 
+ 
+    def _on_accept_scenario(self, scenario_name: str,
+                             principal: float, months: int):
+        """
+        Called when the user clicks Accept on a loan scenario card.
+        Navigates to the loans screen with the values pre-filled.
+        """
+        result = self._statement_result
+        client = result.client_name if result else ""
+        nin    = result.nin         if result else ""
+ 
+        # Show confirmation in chat
+        self._add_message(
+            "assistant",
+            f"Scenario accepted: {scenario_name.title()} — "
+            f"UGX {int(principal):,} over {months} months.\n\n"
+            f"Opening the loan form now..."
+        )
+ 
+        # Pass values to loans screen via AppRoot
+        # AppRoot should expose a method like pre_fill_loan(principal, months, client, nin)
+        if hasattr(self.master, "pre_fill_loan"):
+            self.master.pre_fill_loan(
+                principal   = principal,
+                months      = months,
+                client_name = client,
+                nin         = nin,
+            )
+            self.master.show_screen("loans")
 
     # ── Message rendering ──────────────────────────────────────────────────────
 
