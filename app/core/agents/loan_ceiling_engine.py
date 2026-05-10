@@ -139,43 +139,54 @@ class LoanCeilingEngine:
     ) -> CeilingResult:
         """
         Calculate loan ceiling from available financial data.
-
+ 
+        Interest method: 10% PER MONTH on principal (Bingongold Credit).
+          Total Interest     = Principal × 10% × Duration (months)
+          Total Repayable    = Principal + Total Interest
+          Monthly Instalment = Total Repayable ÷ Duration (months)
+ 
+        Working backwards from a target instalment:
+          Principal = Instalment × Duration ÷ (1 + 0.10 × Duration)
+ 
         Priority: statement data > stated income > minimum fallback
         """
         red_flags = []
         warnings  = []
-
+ 
         # ── Step 1: Determine income to use ───────────────────────────────────
         net_flow      = Decimal("0")
         income_source = "stated"
-
+ 
         if statement_result and hasattr(statement_result, "avg_monthly_net"):
-            net_flow = Decimal(str(statement_result.avg_monthly_net))
+            net_flow      = Decimal(str(statement_result.avg_monthly_net))
             income_source = "statement"
-
-            # Check for red flags in statement
+ 
+            # Red flags from statement
             if statement_result.income_consistency < 0.5:
                 red_flags.append(
                     "Income is highly irregular — high risk of repayment gaps.")
             if float(net_flow) < 0:
                 red_flags.append(
-                    "Statement shows negative net flow — borrower spends more than they earn.")
+                    "Statement shows negative net flow — "
+                    "borrower spends more than they earn.")
                 net_flow = Decimal("0")
             if len(statement_result.transactions) < 5:
                 warnings.append(
                     "Very few transactions found — statement may be incomplete.")
-
+ 
         elif stated_income > 0:
             net_flow      = Decimal(str(stated_income)) * Decimal("0.60")
             income_source = "stated"
             warnings.append(
-                "No statement uploaded. Using 60% of stated income as estimated net flow.")
+                "No statement uploaded. "
+                "Using 60% of stated income as estimated net flow.")
         else:
-            net_flow = Decimal("50000")   # absolute minimum assumption
+            net_flow      = Decimal("50000")   # absolute minimum assumption
             income_source = "minimum"
             warnings.append(
-                "No income data available. Using minimum assumption of UGX 50,000/month.")
-
+                "No income data available. "
+                "Using minimum assumption of UGX 50,000/month.")
+ 
         # Subtract existing loan commitments
         if existing_loans_monthly > 0:
             net_flow -= Decimal(str(existing_loans_monthly))
@@ -183,20 +194,23 @@ class LoanCeilingEngine:
                 red_flags.append(
                     "Existing loan payments exceed estimated net income.")
                 net_flow = Decimal("0")
-
+ 
         # ── Step 2: Calculate max monthly instalment ──────────────────────────
+        # Borrower can afford at most REPAYMENT_RATIO (30%) of net flow per month
         max_instalment = net_flow * cls.REPAYMENT_RATIO
-
+ 
         # ── Step 3: Calculate standard ceiling ────────────────────────────────
+        # 10% per month: Principal = Instalment × Duration ÷ (1 + 0.10 × Duration)
         duration = preferred_duration or cls.DEFAULT_DURATION
-        # ceiling = instalment × duration ÷ (1 + interest_rate)
-        standard_ceiling = max_instalment * duration / (1 + cls.INTEREST_RATE)
+        standard_ceiling = (
+            max_instalment * duration / (1 + cls.INTEREST_RATE * duration)
+        )
         standard_ceiling = cls._apply_caps(standard_ceiling)
-
+ 
         # ── Step 4: Affordability score ───────────────────────────────────────
         score = cls._affordability_score(
             net_flow, standard_ceiling, duration, red_flags)
-
+ 
         # ── Step 5: Build three scenarios ─────────────────────────────────────
         scenarios = [
             cls._build_scenario(
@@ -218,7 +232,7 @@ class LoanCeilingEngine:
                 net_flow,
             ),
         ]
-
+ 
         return CeilingResult(
             recommended_ceiling    = standard_ceiling,
             max_monthly_instalment = max_instalment,
@@ -231,7 +245,6 @@ class LoanCeilingEngine:
             warnings               = warnings,
             interest_rate          = cls.INTEREST_RATE * 100,
         )
-
     @classmethod
     def _build_scenario(
         cls,
@@ -241,7 +254,7 @@ class LoanCeilingEngine:
         net_flow: Decimal,
     ) -> LoanScenario:
         principal = cls._apply_caps(principal)
-        interest  = principal * cls.INTEREST_RATE
+        interest  = principal * cls.INTEREST_RATE * duration   # 10% per month × months
         total     = principal + interest
         monthly   = total / duration if duration > 0 else total
         aff_pct   = (float(monthly) / float(net_flow) * 100) if net_flow > 0 else 0
