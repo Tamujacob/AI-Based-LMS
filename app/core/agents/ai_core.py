@@ -201,36 +201,57 @@ You have access to live database data and statement analysis results provided be
     def chat(
         message: str,
         history: list,
-        callback: Callable[[str], None] = None,
+        callback=None,
     ) -> str:
         """
         Main chatbot entry point.
         Enriches context with live DB data + local model results,
         then sends to Groq (or returns local answer if offline).
+ 
+        History may contain {"role": "system"} entries injected by
+        chatbot_screen.py (e.g. statement analysis context). These are
+        extracted and merged into the Groq system prompt so the AI
+        always has full context for follow-up questions.
         """
         db_context = AICore._build_db_context()
         local_data = AICore._check_local_data_request(message)
-
+ 
         full_context = db_context
         if local_data:
             full_context += f"\n\nLOCAL AI DATA:\n{local_data}"
-
-        # Build message list for Groq
-        messages = []
-        for h in history[-6:]:   # last 6 exchanges keeps token count low
-            if isinstance(h, dict) and "role" in h and "content" in h:
-                messages.append(h)
+ 
+        # ── Separate system messages from conversation history ────────────
+        # System messages (e.g. statement context) are injected by
+        # chatbot_screen.py at position 0 of history. Extract them and
+        # append their content to the system prompt so Groq sees them.
+        system_context_parts = []
+        conversation = []
+ 
+        for h in history:
+            if not isinstance(h, dict) or "role" not in h or "content" not in h:
+                continue
+            if h["role"] == "system":
+                system_context_parts.append(h["content"])
+            else:
+                conversation.append(h)
+ 
+        # Keep last 6 conversation exchanges to stay within token limits
+        messages = conversation[-6:]
         messages.append({"role": "user", "content": message})
-
+ 
+        # Build full system prompt: base + DB context + statement context
         system = AICore.SYSTEM_PROMPT + f"\n\nLIVE DATABASE CONTEXT:\n{full_context}"
-
+        if system_context_parts:
+            system += "\n\n" + "\n\n".join(system_context_parts)
+        # ── End fix ───────────────────────────────────────────────────────
+ 
         return AICore._call_groq_messages(
             messages=messages,
             system=system,
             callback=callback,
             fallback_fn=lambda: AICore._local_chat_answer(message, db_context),
         )
-
+ 
     # ── Groq API calls ─────────────────────────────────────────────────────────
 
     @staticmethod
