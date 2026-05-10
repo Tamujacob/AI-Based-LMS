@@ -341,11 +341,7 @@ class StatementResultCard(ctk.CTkFrame):
                                             "income_pct", "percentage", default=0)),
                 })
         else:
-            # Fallback: calculate scenarios from avg_monthly_income
-            # Uses same formula as loan_ceiling_engine:
-            #   principal = (pct * income * months) / 1.10
             income = r.avg_monthly_income or 0
-            RATE   = 1.10  # 10% flat
 
             for name, pct, mos in [
                 ("Conservative", 0.20, 6),
@@ -353,7 +349,7 @@ class StatementResultCard(ctk.CTkFrame):
                 ("Extended",     0.40, 12),
             ]:
                 instalment = income * pct
-                principal  = (instalment * mos) / RATE
+                principal  = (instalment * mos) / (1 + 0.10 * mos)
                 scenarios.append({
                     "name":       name,
                     "principal":  round(principal),
@@ -373,7 +369,7 @@ class StatementResultCard(ctk.CTkFrame):
 
         ctk.CTkLabel(
             section,
-            text="Loan scenarios  (10% flat interest)",
+            text="Loan scenarios  (10% per month on principal)",
             font=FONTS.get("caption", ("Helvetica", 11)),
             text_color=COLORS.get("text_muted", "#718096"),
             anchor="w",
