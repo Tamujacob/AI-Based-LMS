@@ -122,7 +122,7 @@ class StatementResultCard(ctk.CTkFrame):
 
         # Transaction count + consistency badge (no risk label — no loan yet)
         tx_count   = len(r.transactions)
-        cons_pct   = int(r.income_consistency * 100)
+        cons_pct   = round(r.income_consistency * 100)
         cons_color = (COLORS.get("accent_green", "#276749")
                       if r.income_consistency >= 0.6
                       else COLORS.get("warning", "#D69E2E"))

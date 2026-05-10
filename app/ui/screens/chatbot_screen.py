@@ -360,7 +360,7 @@ class ChatbotScreen(ctk.CTkFrame):
                 ))
                 return
  
-            # ── CHANGED: render card instead of monospace text dump ──────────
+            # ── Render card ───────────────────────────────────────────────────
             from app.core.agents.loan_ceiling_engine import LoanCeilingEngine
             ceiling = LoanCeilingEngine.calculate(statement_result=result)
  
@@ -376,18 +376,38 @@ class ChatbotScreen(ctk.CTkFrame):
                 self._scroll_to_bottom()
  
             self.after(0, show_card)
-            # ── END CHANGED ──────────────────────────────────────────────────
  
-            # Build enriched context for Groq
-            enriched_context = (
-                f"STATEMENT ANALYSIS RESULTS:\n{result.as_text()}\n\n"
-                f"LOAN CEILING:\n{ceiling.as_text() if ceiling else 'N/A'}\n\n"
-                f"USER QUESTION: {message}"
+            # ── KEY FIX: inject statement context as a system message ─────────
+            # This makes the full statement analysis available to EVERY
+            # follow-up question in this conversation — the AI will never
+            # say "no statement provided" again.
+            ceiling_text = ceiling.as_text() if ceiling else "N/A"
+            statement_context = (
+                f"[STATEMENT CONTEXT — available for all follow-up questions]\n"
+                f"A financial statement has been uploaded and analysed.\n\n"
+                f"{result.as_text()}\n\n"
+                f"LOAN CEILING SCENARIOS:\n{ceiling_text}\n"
+                f"[END STATEMENT CONTEXT]"
             )
  
+            # Insert as a system-style message at position 0 of history
+            # (before any user messages) so it acts as persistent background knowledge.
+            # If a previous statement context exists, replace it.
+            self.conversation_history = [
+                msg for msg in self.conversation_history
+                if not (msg["role"] == "system"
+                        and "[STATEMENT CONTEXT" in msg.get("content", ""))
+            ]
+            self.conversation_history.insert(0, {
+                "role":    "system",
+                "content": statement_context,
+            })
+            # ── END KEY FIX ───────────────────────────────────────────────────
+ 
+            # Send first response — history already includes statement context
             from app.core.agents.ai_core import AICore
             response = AICore.chat(
-                message=enriched_context,
+                message=message,
                 history=self.conversation_history[:-1],
             )
             self.conversation_history.append(
@@ -415,7 +435,6 @@ class ChatbotScreen(ctk.CTkFrame):
         client = result.client_name if result else ""
         nin    = result.nin         if result else ""
  
-        # Show confirmation in chat
         self._add_message(
             "assistant",
             f"Scenario accepted: {scenario_name.title()} — "
@@ -423,8 +442,6 @@ class ChatbotScreen(ctk.CTkFrame):
             f"Opening the loan form now..."
         )
  
-        # Pass values to loans screen via AppRoot
-        # AppRoot should expose a method like pre_fill_loan(principal, months, client, nin)
         if hasattr(self.master, "pre_fill_loan"):
             self.master.pre_fill_loan(
                 principal   = principal,
@@ -433,6 +450,15 @@ class ChatbotScreen(ctk.CTkFrame):
                 nin         = nin,
             )
             self.master.show_screen("loans")
+ 
+    def _clear_statement_context(self):
+        """Remove the injected statement system message from history."""
+        self.conversation_history = [
+            msg for msg in self.conversation_history
+            if not (msg["role"] == "system"
+                    and "[STATEMENT CONTEXT" in msg.get("content", ""))
+        ]
+        self._statement_result = None
 
     # ── Message rendering ──────────────────────────────────────────────────────
 
