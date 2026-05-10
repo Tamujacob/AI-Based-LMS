@@ -35,23 +35,6 @@ def _ugx(value: float) -> str:
     return f"UGX {int(value):,}"
 
 
-def _risk_color(consistency: float, net: float) -> str:
-    """Return a COLORS key based on risk level."""
-    if net < 0 or consistency < 0.4:
-        return COLORS.get("danger", "#E53E3E")
-    if consistency < 0.6:
-        return COLORS.get("warning", "#D69E2E")
-    return COLORS.get("accent_green", "#276749")
-
-
-def _risk_label(consistency: float, net: float) -> str:
-    if net < 0 or consistency < 0.4:
-        return "HIGH RISK"
-    if consistency < 0.6:
-        return "MEDIUM RISK"
-    return "LOW RISK"
-
-
 def _institution_label(stmt_type: str) -> str:
     return {
         "mtn_momo":  "MTN MoMo",
@@ -89,8 +72,7 @@ class StatementResultCard(ctk.CTkFrame):
         self._build_header()
         self._build_kpi_row()
         self._build_monthly_breakdown()
-        if ceiling:
-            self._build_loan_scenarios()
+        self._build_loan_scenarios()   # always renders — falls back to calc from income
         self._build_risk_note()
 
     # ── Header ────────────────────────────────────────────────────────────────
@@ -138,20 +120,22 @@ class StatementResultCard(ctk.CTkFrame):
             anchor="w",
         ).grid(row=1, column=1, sticky="w")
 
-        # Risk badge
-        net         = r.avg_monthly_income - r.avg_monthly_expense
-        risk_color  = _risk_color(r.income_consistency, net)
-        risk_text   = _risk_label(r.income_consistency, net)
-        tx_count    = len(r.transactions)
+        # Transaction count + consistency badge (no risk label — no loan yet)
+        tx_count   = len(r.transactions)
+        cons_pct   = int(r.income_consistency * 100)
+        cons_color = (COLORS.get("accent_green", "#276749")
+                      if r.income_consistency >= 0.6
+                      else COLORS.get("warning", "#D69E2E"))
 
         badge_frame = ctk.CTkFrame(hdr, fg_color="transparent")
         badge_frame.grid(row=0, column=2, rowspan=2, sticky="e", padx=(8, 0))
 
         ctk.CTkLabel(
-            badge_frame, text=risk_text,
+            badge_frame,
+            text=f"{cons_pct}% consistent",
             font=FONTS.get("caption", ("Helvetica", 11)),
             text_color="#FFFFFF",
-            fg_color=risk_color,
+            fg_color=cons_color,
             corner_radius=8,
             padx=10, pady=3,
         ).pack(anchor="e")
@@ -324,12 +308,67 @@ class StatementResultCard(ctk.CTkFrame):
 
     def _build_loan_scenarios(self):
         c = self.ceiling
-        if not c or not hasattr(c, "scenarios"):
+        r = self.result
+
+        # ── Build scenarios list ─────────────────────────────────────────────
+        # Priority 1: use CeilingResult.scenarios if available
+        # Priority 2: build directly from StatementResult avg_monthly_income
+        # This ensures scenarios always render even if LoanCeilingEngine fails.
+
+        scenarios = []
+
+        if c and hasattr(c, "scenarios") and c.scenarios:
+            raw = c.scenarios
+            def _sget(obj, *keys, default=0):
+                for k in keys:
+                    if isinstance(obj, dict):
+                        if k in obj: return obj[k]
+                    else:
+                        if hasattr(obj, k): return getattr(obj, k)
+                return default
+
+            for i, s in enumerate(raw):
+                scenarios.append({
+                    "name":      str(_sget(s, "name", "label", "scenario_name",
+                                          default=f"Option {i+1}")),
+                    "principal": float(_sget(s, "principal", "loan_amount",
+                                            "amount", default=0)),
+                    "months":    int(_sget(s, "months", "duration",
+                                          "duration_months", "term", default=0)),
+                    "instalment":float(_sget(s, "monthly_instalment", "instalment",
+                                            "monthly_payment", "payment", default=0)),
+                    "pct_income":float(_sget(s, "pct_income", "income_percentage",
+                                            "income_pct", "percentage", default=0)),
+                })
+        else:
+            # Fallback: calculate scenarios from avg_monthly_income
+            # Uses same formula as loan_ceiling_engine:
+            #   principal = (pct * income * months) / 1.10
+            income = r.avg_monthly_income or 0
+            RATE   = 1.10  # 10% flat
+
+            for name, pct, mos in [
+                ("Conservative", 0.20, 6),
+                ("Standard",     0.30, 9),
+                ("Extended",     0.40, 12),
+            ]:
+                instalment = income * pct
+                principal  = (instalment * mos) / RATE
+                scenarios.append({
+                    "name":       name,
+                    "principal":  round(principal),
+                    "months":     mos,
+                    "instalment": round(instalment),
+                    "pct_income": pct,
+                })
+
+        if not scenarios:
             return
 
+        # ── Render ───────────────────────────────────────────────────────────
         section = ctk.CTkFrame(self, fg_color="transparent")
         section.grid(row=6, column=0, sticky="ew", padx=16, pady=10)
-        for i in range(len(c.scenarios)):
+        for i in range(len(scenarios)):
             section.columnconfigure(i, weight=1, uniform="scenario")
 
         ctk.CTkLabel(
@@ -339,40 +378,16 @@ class StatementResultCard(ctk.CTkFrame):
             text_color=COLORS.get("text_muted", "#718096"),
             anchor="w",
         ).grid(row=0, column=0,
-               columnspan=max(len(c.scenarios), 1),
+               columnspan=len(scenarios),
                sticky="w", pady=(0, 8))
 
-        scenario_colors = {
-            "conservative": COLORS.get("border", "#E2E8F0"),
-            "standard":     COLORS.get("accent_green", "#276749"),
-            "extended":     COLORS.get("border", "#E2E8F0"),
-        }
-
-        for i, scenario in enumerate(c.scenarios):
-            # Support both dict-style and dataclass/object-style LoanScenario.
-            # _sget tries multiple attribute names so we don't break if your
-            # loan_ceiling_engine uses different field names.
-            def _sget(obj, *keys, default=0):
-                for k in keys:
-                    if isinstance(obj, dict):
-                        if k in obj:
-                            return obj[k]
-                    else:
-                        if hasattr(obj, k):
-                            return getattr(obj, k)
-                return default
-
-            name       = _sget(scenario, "name", "label", "scenario_name",
-                                default=f"Option {i+1}")
-            principal  = _sget(scenario, "principal", "loan_amount",
-                                "amount", default=0)
-            months     = _sget(scenario, "months", "duration",
-                                "duration_months", "term", default=0)
-            instalment = _sget(scenario, "monthly_instalment", "instalment",
-                                "monthly_payment", "payment", default=0)
-            pct_income = _sget(scenario, "pct_income", "income_percentage",
-                                "income_pct", "percentage", default=0)
-            is_std     = str(name).lower() == "standard"
+        for i, sc in enumerate(scenarios):
+            name       = sc["name"]
+            principal  = sc["principal"]
+            months     = sc["months"]
+            instalment = sc["instalment"]
+            pct_income = sc["pct_income"]
+            is_std     = name.lower() == "standard"
 
             card = ctk.CTkFrame(
                 section,
@@ -394,10 +409,10 @@ class StatementResultCard(ctk.CTkFrame):
                     text_color=COLORS.get("accent_green", "#276749"),
                     fg_color=COLORS.get("bg_input", "#F7FAFC"),
                     corner_radius=0,
-                ).pack(fill="x", pady=(0, 0))
+                ).pack(fill="x")
 
             ctk.CTkLabel(
-                card, text=name.title(),
+                card, text=name,
                 font=FONTS.get("caption", ("Helvetica", 11)),
                 text_color=COLORS.get("text_muted", "#718096"),
                 anchor="w",
@@ -412,7 +427,7 @@ class StatementResultCard(ctk.CTkFrame):
 
             ctk.CTkLabel(
                 card,
-                text=f"{months} months  ·  {int(pct_income*100)}% of income",
+                text=f"{months} months  ·  {int(pct_income * 100)}% of income",
                 font=FONTS.get("caption", ("Helvetica", 11)),
                 text_color=COLORS.get("text_muted", "#718096"),
                 anchor="w",
@@ -424,7 +439,7 @@ class StatementResultCard(ctk.CTkFrame):
                 font=FONTS.get("body_small", ("Helvetica", 12)),
                 text_color=COLORS.get("text_secondary", "#4A5568"),
                 anchor="w",
-            ).pack(anchor="w", padx=12, pady=(2, 0))
+            ).pack(anchor="w", padx=12, pady=(2, 8))
 
             ctk.CTkButton(
                 card, text="Accept",
@@ -433,13 +448,12 @@ class StatementResultCard(ctk.CTkFrame):
                 fg_color=(COLORS.get("accent_green", "#276749")
                           if is_std else COLORS.get("bg_input", "#F7FAFC")),
                 hover_color=COLORS.get("accent_green_dark", "#1C4532"),
-                text_color=("#FFFFFF"
-                            if is_std
+                text_color=("#FFFFFF" if is_std
                             else COLORS.get("text_primary", "#1A202C")),
                 corner_radius=6,
                 command=lambda n=name, p=principal, m=months: (
                     self.on_accept(n, p, m) if self.on_accept else None),
-            ).pack(fill="x", padx=12, pady=10)
+            ).pack(fill="x", padx=12, pady=(0, 10))
 
         # Divider
         ctk.CTkFrame(
