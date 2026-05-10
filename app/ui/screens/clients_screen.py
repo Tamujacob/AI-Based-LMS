@@ -398,7 +398,7 @@ class ClientsScreen(ctk.CTkFrame):
 
         data = {
             "full_name":                 _get("full_name"),
-            "nin":                       _get("nin"),
+            "nin":                       _get("nin").upper(),   # force uppercase
             "phone_number":              _get("phone_number"),
             "alt_phone_number":          _get("alt_phone_number"),
             "email":                     _get("email"),
@@ -416,6 +416,10 @@ class ClientsScreen(ctk.CTkFrame):
             "notes":                     _get_textbox("notes"),
         }
 
+        # ── Validation ────────────────────────────────────────────────────────
+        import re
+
+        # 1. Required fields
         if not data["full_name"]:
             self.form_error.configure(text="⚠  Full name is required.")
             return
@@ -423,6 +427,66 @@ class ClientsScreen(ctk.CTkFrame):
             self.form_error.configure(text="⚠  Phone number is required.")
             return
 
+        # 2. NIN format
+        #    Uganda NIN: C[MF] + 8 digits + 4 alphanumeric = 14 chars total
+        #    Examples: CM97012345ABCD  |  CF85123456X4CU
+        nin = data["nin"]
+        if nin:
+            nin_pattern = re.compile(r'^C[MF]\d{8}[A-Z0-9]{4}$')
+            if not nin_pattern.match(nin):
+                self.form_error.configure(
+                    text="⚠  Invalid NIN format. Must be 14 characters starting "
+                         "with CM (male) or CF (female), e.g. CM97012345ABCD.")
+                return
+
+        # 3. NIN uniqueness — no other active client may share this NIN
+        if nin:
+            try:
+                from app.database.connection import get_db
+                from sqlalchemy import text as sql_text
+                editing_id = self.selected_client.id if self.selected_client else None
+                with get_db() as db:
+                    query = "SELECT id FROM clients WHERE nin = :nin AND is_active = true"
+                    if editing_id:
+                        query += " AND id != :eid"
+                    params = {"nin": nin}
+                    if editing_id:
+                        params["eid"] = editing_id
+                    existing = db.execute(sql_text(query), params).fetchone()
+                if existing:
+                    self.form_error.configure(
+                        text="⚠  This NIN is already registered to another client.")
+                    return
+            except Exception as e:
+                self.form_error.configure(
+                    text=f"⚠  Could not verify NIN uniqueness: {e}")
+                return
+
+        # 4. Phone number uniqueness — no other active client may share this number
+        phone = data["phone_number"]
+        try:
+            from app.database.connection import get_db
+            from sqlalchemy import text as sql_text
+            editing_id = self.selected_client.id if self.selected_client else None
+            with get_db() as db:
+                query = ("SELECT id FROM clients "
+                         "WHERE phone_number = :phone AND is_active = true")
+                if editing_id:
+                    query += " AND id != :eid"
+                params = {"phone": phone}
+                if editing_id:
+                    params["eid"] = editing_id
+                existing = db.execute(sql_text(query), params).fetchone()
+            if existing:
+                self.form_error.configure(
+                    text="⚠  This phone number is already registered to another client.")
+                return
+        except Exception as e:
+            self.form_error.configure(
+                text=f"⚠  Could not verify phone number uniqueness: {e}")
+            return
+
+        # ── Save ──────────────────────────────────────────────────────────────
         try:
             if self.selected_client:
                 ClientService.update_client(self.selected_client.id, data)
