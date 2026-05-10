@@ -113,14 +113,14 @@ class LoanCeilingEngine:
     Calculation method:
       1. Determine net monthly cash flow (from statement or stated income).
       2. Calculate max monthly instalment = net flow × REPAYMENT_RATIO.
-      3. Calculate loan ceiling = max instalment × duration / (1 + INTEREST_RATE).
+      3. Calculate loan ceiling = max instalment × duration / (1 + INTEREST_RATE × duration)
       4. Apply caps and safety checks.
       5. Build three scenarios.
     """
 
     # ── Configuration ─────────────────────────────────────────────────────────
     REPAYMENT_RATIO     = Decimal("0.30")   # max 30% of net income for repayment
-    INTEREST_RATE       = Decimal("0.10")   # Bingongold flat rate 10%
+    INTEREST_RATE = Decimal("0.10")   # Bingongold rate: 10% per month on principal
     MIN_LOAN            = Decimal("100000") # UGX 100,000 minimum
     MAX_LOAN            = Decimal("50000000")  # UGX 50 million absolute maximum
     DEFAULT_DURATION    = 12                # months if not specified
@@ -286,9 +286,11 @@ class LoanCeilingEngine:
         """Score 0–100. Higher = better ability to repay."""
         if net_flow <= 0:
             return 10
-        total    = ceiling * (1 + cls.INTEREST_RATE)
-        monthly  = total / duration
-        ratio    = float(monthly) / float(net_flow)
+
+        # 10% per month: total repayable = principal × (1 + rate × duration)
+        total   = ceiling * (1 + cls.INTEREST_RATE * duration)
+        monthly = total / duration
+        ratio   = float(monthly) / float(net_flow)
 
         if ratio < 0.20:
             score = 90
