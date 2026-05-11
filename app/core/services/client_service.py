@@ -3,11 +3,64 @@ app/core/services/client_service.py
 ────────────────────────────────────
 All database operations for client/borrower profiles.
 Every write operation is fully audit-logged.
+
+Validation enforced at service level (applies to ALL callers —
+UI form, chatbot, scripts, API):
+  - NIN format:     C[MF] + 8 digits + 4 alphanumeric = 14 chars
+  - NIN uniqueness: no two active clients may share a NIN
+  - Phone uniqueness: no two active clients may share a phone number
 """
 
+import re
 from app.database.connection import get_db
 from app.core.models.client import Client
 from app.core.services.audit_service import AuditService, Actions
+
+
+# ── Uganda NIN pattern ─────────────────────────────────────────────────────────
+# Format: C[MF] + 8 digits + 4 alphanumeric = 14 characters total
+# CM = male citizen, CF = female citizen
+# Example: CM97012345ABCD  |  CF85123456X4CU
+_NIN_PATTERN = re.compile(r'^C[MF]\d{8}[A-Z0-9]{4}$', re.IGNORECASE)
+
+
+def _validate_nin_format(nin: str):
+    """Raise ValueError if NIN does not match Uganda's 14-char format."""
+    if not _NIN_PATTERN.match(nin):
+        raise ValueError(
+            f'Invalid NIN "{nin}". '
+            f'Must be 14 characters starting with CM (male) or CF (female), '
+            f'followed by 8 digits and 4 alphanumeric characters. '
+            f'Example: CM97012345ABCD'
+        )
+
+
+def _check_nin_unique(db, nin: str, exclude_id: int = None):
+    """Raise ValueError if another active client already has this NIN."""
+    query = db.query(Client).filter(
+        Client.nin       == nin.upper(),
+        Client.is_active == True,
+    )
+    if exclude_id:
+        query = query.filter(Client.id != exclude_id)
+    if query.first():
+        raise ValueError(
+            f'NIN "{nin.upper()}" is already registered to another client.'
+        )
+
+
+def _check_phone_unique(db, phone: str, exclude_id: int = None):
+    """Raise ValueError if another active client already has this phone number."""
+    query = db.query(Client).filter(
+        Client.phone_number == phone,
+        Client.is_active    == True,
+    )
+    if exclude_id:
+        query = query.filter(Client.id != exclude_id)
+    if query.first():
+        raise ValueError(
+            f'Phone number "{phone}" is already registered to another client.'
+        )
 
 
 def _client_snapshot(client: Client) -> dict:
@@ -32,11 +85,39 @@ class ClientService:
         """
         Create and return a new client.
 
+        Validates:
+          - NIN format (if provided)
+          - NIN uniqueness (if provided)
+          - Phone number uniqueness
+
         Args:
             data:           Dict of Client field values.
             created_by_id:  ID of the user performing this action (for audit log).
+
+        Raises:
+            ValueError: if NIN format is wrong, or NIN/phone already exists.
         """
+        # ── Normalise NIN to uppercase ─────────────────────────────────────
+        nin = (data.get("nin") or "").strip().upper()
+        if nin:
+            data["nin"] = nin
+
+        phone = (data.get("phone_number") or "").strip()
+
         with get_db() as db:
+            # ── Validate NIN format ────────────────────────────────────────
+            if nin:
+                _validate_nin_format(nin)
+
+            # ── Check NIN uniqueness ───────────────────────────────────────
+            if nin:
+                _check_nin_unique(db, nin)
+
+            # ── Check phone uniqueness ─────────────────────────────────────
+            if phone:
+                _check_phone_unique(db, phone)
+
+            # ── Create client ──────────────────────────────────────────────
             client = Client(**data)
             db.add(client)
             db.commit()
@@ -95,7 +176,8 @@ class ClientService:
     def get_client_by_nin(nin: str) -> Client | None:
         """Look up an active client by NIN — used to prevent duplicates."""
         with get_db() as db:
-            client = db.query(Client).filter_by(nin=nin, is_active=True).first()
+            client = db.query(Client).filter_by(
+                nin=nin.upper(), is_active=True).first()
             if client:
                 db.expunge(client)
         return client
@@ -117,11 +199,27 @@ class ClientService:
         """
         Update client fields from a dictionary.
 
+        Validates:
+          - NIN format (if NIN is being changed)
+          - NIN uniqueness (excludes current client)
+          - Phone uniqueness (excludes current client)
+
         Args:
             client_id:      Primary key of the client to update.
             data:           Dict of fields to update.
             updated_by_id:  ID of the user performing this action (for audit log).
+
+        Raises:
+            ValueError: if client not found, NIN format wrong, or
+                        NIN/phone already belongs to another client.
         """
+        # ── Normalise NIN to uppercase ─────────────────────────────────────
+        nin = (data.get("nin") or "").strip().upper()
+        if nin:
+            data["nin"] = nin
+
+        phone = (data.get("phone_number") or "").strip()
+
         with get_db() as db:
             client = db.query(Client).filter_by(id=client_id).first()
             if not client:
@@ -129,6 +227,19 @@ class ClientService:
 
             old_snapshot = _client_snapshot(client)
 
+            # ── Validate NIN format ────────────────────────────────────────
+            if nin:
+                _validate_nin_format(nin)
+
+            # ── Check NIN uniqueness (exclude this client) ─────────────────
+            if nin:
+                _check_nin_unique(db, nin, exclude_id=client_id)
+
+            # ── Check phone uniqueness (exclude this client) ───────────────
+            if phone:
+                _check_phone_unique(db, phone, exclude_id=client_id)
+
+            # ── Apply updates ──────────────────────────────────────────────
             for key, value in data.items():
                 if hasattr(client, key):
                     setattr(client, key, value)
@@ -165,7 +276,7 @@ class ClientService:
         with get_db() as db:
             client = db.query(Client).filter_by(id=client_id).first()
             if client:
-                client_name     = client.full_name
+                client_name      = client.full_name
                 client.is_active = False
                 db.commit()
 
