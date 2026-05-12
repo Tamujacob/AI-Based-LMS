@@ -230,6 +230,9 @@ class AppRoot(ctk.CTk):
         if "login" in self._screen_classes:
             del self._screen_classes["login"]
 
+        from app.core.agents.background_agent import BackgroundAgent
+        BackgroundAgent.start()    
+
         self.show_screen("dashboard")
 
     def logout(self):
