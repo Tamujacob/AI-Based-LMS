@@ -236,6 +236,14 @@ class AppRoot(ctk.CTk):
         self.show_screen("dashboard")
 
     def logout(self):
+        # ── NEW: stop the background agent on logout ───────────────────
+        try:
+            from app.core.agents.background_agent import BackgroundAgent
+            BackgroundAgent.stop()
+        except Exception:
+            pass
+        # ── END NEW ────────────────────────────────────────────────────
+ 
         self.current_user        = None
         self.current_screen_name = None
         self.show_screen("login", force_rebuild=True)
