@@ -148,6 +148,11 @@ class LoanService:
             ),
             new_value   = _loan_snapshot(loan),
         )
+        try:
+            from app.core.agents.background_agent import BackgroundAgent
+            BackgroundAgent.flag_loan_risk(loan.id)
+        except Exception:
+            pass 
         return loan
 
     # ── Approval workflow ──────────────────────────────────────────────────────
