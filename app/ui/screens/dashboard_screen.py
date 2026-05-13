@@ -609,10 +609,19 @@ class DashboardScreen(ctk.CTkFrame):
                 width=14,
             ).pack(side="left")
 
-        # Type badge
+        # Type badge — use a light background mapped from the type color
+        # Tkinter does NOT support 8-digit hex (#RRGGBBAA) — use explicit light colors
+        _TYPE_BG = {
+            "#C0392B": "#FDEDEC",   # loan_overdue     — light red
+            "#E67E22": "#FEF9E7",   # instalment_overdue — light orange
+            "#2980B9": "#EBF5FB",   # instalment_upcoming — light blue
+            "#8E44AD": "#F5EEF8",   # late_payment_fee  — light purple
+        }
+        type_bg = _TYPE_BG.get(cfg["color"], COLORS.get("bg_input", "#F7FAFC"))
+
         type_frame = ctk.CTkFrame(
             row,
-            fg_color=cfg["color"] + "22",   # 13% opacity
+            fg_color=type_bg,
             corner_radius=6,
             width=130,
         )
@@ -656,13 +665,22 @@ class DashboardScreen(ctk.CTkFrame):
             anchor="w",
         ).pack(side="left", padx=(0, 8))
 
-        # Severity badge
+        # Severity badge — same fix: map severity to explicit light bg color
+        _SEV_BG = {
+            "CRITICAL": "#FDEDEC",
+            "HIGH":     "#FDEDEC",
+            "MEDIUM":   "#FEF9E7",
+            "LOW":      "#FEFAE7",
+            "UPCOMING": "#EBF5FB",
+        }
+        sev_bg = _SEV_BG.get(notif["severity"], COLORS.get("bg_input", "#F7FAFC"))
+
         ctk.CTkLabel(
             row,
             text=notif["severity"],
             font=FONTS["caption"],
             text_color=sev_color,
-            fg_color=sev_color + "22",
+            fg_color=sev_bg,
             corner_radius=4,
             width=80,
             padx=6, pady=2,
