@@ -3,6 +3,10 @@ app/core/services/repayment_service.py
 ────────────────────────────────────────
 Recording payments, tracking balances, and repayment history.
 Every write operation is fully audit-logged.
+
+v2 additions:
+  - get_repayment_history_page() — paginated history for the screen
+  - get_repayment_count()        — total count for pagination controls
 """
 
 import uuid
@@ -66,24 +70,15 @@ class RepaymentService:
     def record_payment(
         loan_id: int,
         amount: float,
-        payment_method: str      = "Cash",
-        payment_date: date       = None,
+        payment_method: str        = "Cash",
+        payment_date: date         = None,
         transaction_reference: str = None,
-        notes: str               = None,
-        recorded_by_id: int      = None,
+        notes: str                 = None,
+        recorded_by_id: int        = None,
     ) -> Repayment:
         """
         Record a repayment against a loan.
         Automatically marks the loan as completed if fully paid.
-
-        Args:
-            loan_id:                Primary key of the loan being repaid.
-            amount:                 Amount paid in UGX.
-            payment_method:         Cash / Mobile Money / Bank Transfer / Cheque.
-            payment_date:           Date of payment (defaults to today).
-            transaction_reference:  Optional mobile money or bank ref.
-            notes:                  Optional free-text notes.
-            recorded_by_id:         ID of the user recording this payment (for audit log).
         """
         with get_db() as db:
             loan = db.query(Loan).filter_by(id=loan_id).first()
@@ -91,7 +86,8 @@ class RepaymentService:
                 raise ValueError(f"Loan #{loan_id} not found.")
             if loan.status not in (LoanStatus.active, LoanStatus.approved):
                 raise ValueError(
-                    f"Cannot record payment — loan status is '{loan.status.value}'.")
+                    f"Cannot record payment — loan status is "
+                    f"'{loan.status.value}'.")
 
             loan_number = loan.loan_number
             client_id   = loan.client_id
@@ -109,7 +105,7 @@ class RepaymentService:
             )
             db.add(repayment)
 
-            # Calculate total paid so far (including this payment)
+            # Total paid so far (including this payment)
             previously_paid = sum(
                 r.amount for r in db.query(Repayment).filter_by(
                     loan_id=loan_id,
@@ -128,7 +124,6 @@ class RepaymentService:
             snapshot = _repayment_snapshot(repayment)
             db.expunge(repayment)
 
-        # Fetch client name outside the session
         try:
             from app.core.services.client_service import ClientService
             client      = ClientService.get_client_by_id(client_id)
@@ -147,12 +142,12 @@ class RepaymentService:
                 f"| Client: {client_name} "
                 f"| Amount: UGX {amount:,.0f} "
                 f"| Method: {payment_method}"
-                + (" | Loan fully paid — marked COMPLETED" if loan_auto_completed else "")
+                + (" | Loan fully paid — marked COMPLETED"
+                   if loan_auto_completed else "")
             ),
-            new_value   = snapshot,
+            new_value = snapshot,
         )
 
-        # If loan was auto-completed, log that separately for clarity
         if loan_auto_completed:
             AuditService.log(
                 action      = Actions.LOAN_COMPLETED,
@@ -168,30 +163,27 @@ class RepaymentService:
 
         return repayment
 
+    # ── Delete (void) ──────────────────────────────────────────────────────────
+
     @staticmethod
     def delete_repayment(
         repayment_id: int,
         deleted_by_id: int = None,
     ) -> None:
-        """
-        Soft-delete (void) a repayment record.
-
-        Args:
-            repayment_id:   Primary key of the repayment to void.
-            deleted_by_id:  ID of the user voiding the payment (for audit log).
-        """
+        """Soft-delete (void) a repayment record."""
         receipt_number = "Unknown"
         loan_id        = None
 
         with get_db() as db:
             repayment = db.query(Repayment).filter_by(id=repayment_id).first()
             if repayment:
-                receipt_number          = repayment.receipt_number
-                loan_id                 = repayment.loan_id
-                repayment.status        = RepaymentStatus.cancelled
+                receipt_number   = repayment.receipt_number
+                loan_id          = repayment.loan_id
+                repayment.status = RepaymentStatus.cancelled
                 db.commit()
 
-        loan_number = RepaymentService._loan_number(loan_id) if loan_id else "—"
+        loan_number = (RepaymentService._loan_number(loan_id)
+                       if loan_id else "—")
         AuditService.log(
             action      = Actions.REPAYMENT_DELETED,
             user_id     = deleted_by_id,
@@ -231,12 +223,13 @@ class RepaymentService:
                 status=RepaymentStatus.confirmed,
             ).all()
             total_paid = sum(r.amount for r in paid)
-            balance    = Decimal(str(loan.total_repayable)) - Decimal(str(total_paid))
+            balance    = (Decimal(str(loan.total_repayable))
+                          - Decimal(str(total_paid)))
             return max(balance, Decimal("0"))
 
     @staticmethod
     def get_total_collected_today() -> Decimal:
-        """Sum of all payments recorded today — for dashboard."""
+        """Sum of all payments recorded today."""
         with get_db() as db:
             from sqlalchemy import func
             result = db.query(func.sum(Repayment.amount)).filter(
@@ -247,7 +240,7 @@ class RepaymentService:
 
     @staticmethod
     def get_all_recent_repayments(limit: int = 20) -> list:
-        """Most recent repayments across all loans — for dashboard feed."""
+        """Most recent repayments — for dashboard feed."""
         with get_db() as db:
             repayments = (
                 db.query(Repayment)
@@ -259,3 +252,102 @@ class RepaymentService:
             for r in repayments:
                 db.expunge(r)
             return repayments
+
+    # ── NEW: Paginated history ─────────────────────────────────────────────────
+
+    @staticmethod
+    def get_repayment_history_page(
+        page: int      = 1,
+        page_size: int = 25,
+        loan_id: int   = None,
+    ) -> list[dict]:
+        """
+        Return one page of repayment history as a list of dicts.
+
+        Args:
+            page:       1-based page number.
+            page_size:  Records per page (default 25).
+            loan_id:    If given, filter to this loan only.
+
+        Returns:
+            List of dicts with keys:
+              receipt_number, loan_number, client_name,
+              amount, payment_date, method
+        """
+        from app.database.connection import get_db
+        from sqlalchemy import text
+
+        offset = (page - 1) * page_size
+
+        if loan_id:
+            sql = text("""
+                SELECT r.receipt_number,
+                       l.loan_number,
+                       c.full_name  AS client_name,
+                       r.amount,
+                       r.payment_date,
+                       r.payment_method
+                FROM   repayments r
+                JOIN   loans      l ON r.loan_id   = l.id
+                JOIN   clients    c ON l.client_id = c.id
+                WHERE  r.status  = 'confirmed'
+                  AND  r.loan_id = :loan_id
+                ORDER  BY r.payment_date DESC, r.created_at DESC
+                LIMIT  :limit OFFSET :offset
+            """)
+            params = {"loan_id": loan_id,
+                      "limit": page_size, "offset": offset}
+        else:
+            sql = text("""
+                SELECT r.receipt_number,
+                       l.loan_number,
+                       c.full_name  AS client_name,
+                       r.amount,
+                       r.payment_date,
+                       r.payment_method
+                FROM   repayments r
+                JOIN   loans      l ON r.loan_id   = l.id
+                JOIN   clients    c ON l.client_id = c.id
+                WHERE  r.status = 'confirmed'
+                ORDER  BY r.payment_date DESC, r.created_at DESC
+                LIMIT  :limit OFFSET :offset
+            """)
+            params = {"limit": page_size, "offset": offset}
+
+        with get_db() as db:
+            rows = db.execute(sql, params).mappings().fetchall()
+            return [
+                {
+                    "receipt_number": r["receipt_number"] or "—",
+                    "loan_number":    r["loan_number"]    or "—",
+                    "client_name":    r["client_name"]    or "—",
+                    "amount":         f"UGX {float(r['amount']):,.0f}",
+                    "payment_date":   str(r["payment_date"]),
+                    "method":         r["payment_method"] or "—",
+                }
+                for r in rows
+            ]
+
+    @staticmethod
+    def get_repayment_count(loan_id: int = None) -> int:
+        """
+        Total confirmed repayments — for pagination controls.
+        If loan_id given, count only that loan's repayments.
+        """
+        from app.database.connection import get_db
+        from sqlalchemy import text
+
+        if loan_id:
+            sql = text("""
+                SELECT COUNT(*) FROM repayments
+                WHERE  status  = 'confirmed'
+                  AND  loan_id = :loan_id
+            """)
+            params = {"loan_id": loan_id}
+        else:
+            sql    = text(
+                "SELECT COUNT(*) FROM repayments WHERE status = 'confirmed'")
+            params = {}
+
+        with get_db() as db:
+            return db.execute(sql, params).scalar() or 0

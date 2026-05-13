@@ -201,6 +201,11 @@ class RepaymentsScreen(ctk.CTkFrame):
         self.current_user  = master.current_user
         self.found_loan    = None
         self._last_receipt = None
+        # Pagination state for history panel
+        self._history_page      = 1
+        self._history_page_size = 25
+        self._history_total     = 0
+        self._history_loan_id   = None 
         self._build()
 
     def refresh(self):                                              # ← ADD HERE
@@ -433,34 +438,113 @@ class RepaymentsScreen(ctk.CTkFrame):
         panel.grid(row=0, column=1, sticky="nsew", padx=(8, 24), pady=24)
         panel.columnconfigure(0, weight=1)
         panel.rowconfigure(1, weight=1)
-
+ 
+        # ── Header ────────────────────────────────────────────────
         header = ctk.CTkFrame(panel, fg_color="transparent")
-        header.grid(row=0, column=0, sticky="ew", pady=(0, 12))
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         header.columnconfigure(0, weight=1)
-
-        ctk.CTkLabel(header, text="Payment History",
-                     font=FONTS["title"],
-                     text_color=COLORS["accent_green_dark"]).grid(
-            row=0, column=0, sticky="w")
-        ctk.CTkLabel(header,
-                     text="Click a row to load its receipt for printing.",
-                     font=FONTS["body_small"],
-                     text_color=COLORS["text_muted"]).grid(
-            row=1, column=0, sticky="w")
-
+ 
+        ctk.CTkLabel(
+            header, text="Payment History",
+            font=FONTS["title"],
+            text_color=COLORS["accent_green_dark"],
+        ).grid(row=0, column=0, sticky="w")
+ 
+        ctk.CTkLabel(
+            header,
+            text="Click a row to load its receipt for printing.",
+            font=FONTS["body_small"],
+            text_color=COLORS["text_muted"],
+        ).grid(row=1, column=0, sticky="w")
+ 
+        # ── Table ─────────────────────────────────────────────────
         self.history_table = DataTable(
             panel,
             columns=[
-                ("receipt_number", "Receipt",  130),
-                ("loan_number",    "Loan No.", 110),
-                ("amount",         "Amount",   110),
-                ("payment_date",   "Date",     100),
-                ("method",         "Method",    90),
+                ("receipt_number", "Receipt",   130),
+                ("loan_number",    "Loan No.",  110),
+                ("client_name",    "Client",    140),
+                ("amount",         "Amount",    110),
+                ("payment_date",   "Date",      100),
+                ("method",         "Method",     90),
             ],
             on_select=self._on_history_selected,
         )
         self.history_table.grid(row=1, column=0, sticky="nsew")
+ 
+        # ── Pagination controls ───────────────────────────────────
+        page_row = ctk.CTkFrame(panel, fg_color="transparent")
+        page_row.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+        page_row.columnconfigure(1, weight=1)
+ 
+        self.hist_prev_btn = ctk.CTkButton(
+            page_row, text="◀ Previous",
+            width=110, height=30,
+            fg_color=COLORS["bg_input"],
+            hover_color=COLORS["accent_green"],
+            text_color=COLORS["text_secondary"],
+            font=FONTS["body_small"], corner_radius=6,
+            state="disabled",
+            command=self._history_prev_page,
+        )
+        self.hist_prev_btn.grid(row=0, column=0, sticky="w")
+ 
+        self.hist_page_label = ctk.CTkLabel(
+            page_row, text="",
+            font=FONTS["body_small"],
+            text_color=COLORS["text_muted"],
+        )
+        self.hist_page_label.grid(row=0, column=1)
+ 
+        self.hist_next_btn = ctk.CTkButton(
+            page_row, text="Next ▶",
+            width=110, height=30,
+            fg_color=COLORS["bg_input"],
+            hover_color=COLORS["accent_green"],
+            text_color=COLORS["text_secondary"],
+            font=FONTS["body_small"], corner_radius=6,
+            state="disabled",
+            command=self._history_next_page,
+        )
+        self.hist_next_btn.grid(row=0, column=2, sticky="e")
+ 
+        # Initial load
         self._load_history()
+       
+    def _history_prev_page(self):
+        if self._history_page > 1:
+            self._history_page -= 1
+            self._load_history()
+ 
+    def _history_next_page(self):
+        total_pages = max(
+            1,
+            (self._history_total + self._history_page_size - 1)
+            // self._history_page_size,
+        )
+        if self._history_page < total_pages:
+            self._history_page += 1
+            self._load_history()
+ 
+    def _update_history_pagination(
+            self, total: int, page: int, page_size: int):
+        """Update page label and prev/next button states."""
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        start       = (page - 1) * page_size + 1
+        end         = min(page * page_size, total)
+ 
+        if total == 0:
+            self.hist_page_label.configure(text="No payments recorded")
+        else:
+            self.hist_page_label.configure(
+                text=(f"Page {page} of {total_pages}  "
+                      f"({start}–{end} of {total} payments)"))
+ 
+        self.hist_prev_btn.configure(
+            state="normal" if page > 1 else "disabled")
+        self.hist_next_btn.configure(
+            state="normal" if page < total_pages else "disabled")
+     
 
     # ── helpers ────────────────────────────────────────────────────────────────
 
@@ -906,52 +990,41 @@ class RepaymentsScreen(ctk.CTkFrame):
 
     # ── load history ───────────────────────────────────────────────────────────
     def _load_history(self, loan_id: int = None):
-        try:
-            from app.database.connection import get_db
-            from sqlalchemy import text
+        """
+        Load one page of repayment history in a background thread.
+        If loan_id is given, filter to that loan and reset to page 1.
+        """
+        if loan_id is not None:
+            self._history_loan_id = loan_id
+            self._history_page    = 1
  
-            with get_db() as db:
-                if loan_id:
-                    sql = text("""
-                        SELECT r.receipt_number,
-                               r.amount,
-                               r.payment_date,
-                               r.payment_method,
-                               l.loan_number
-                        FROM   repayments r
-                        JOIN   loans      l ON r.loan_id = l.id
-                        WHERE  r.loan_id = :loan_id
-                        ORDER  BY r.payment_date DESC
-                        LIMIT  25
-                    """)
-                    result = db.execute(sql, {"loan_id": loan_id})
-                else:
-                    sql = text("""
-                        SELECT r.receipt_number,
-                               r.amount,
-                               r.payment_date,
-                               r.payment_method,
-                               l.loan_number
-                        FROM   repayments r
-                        JOIN   loans      l ON r.loan_id = l.id
-                        ORDER  BY r.payment_date DESC
-                        LIMIT  25
-                    """)
-                    result = db.execute(sql)
+        page      = self._history_page
+        page_size = self._history_page_size
+        filt_loan = self._history_loan_id
  
-                rows = [
-                    {
-                        "receipt_number": r.receipt_number or "—",
-                        "loan_number":    r.loan_number    or "—",
-                        "amount":         f"UGX {float(r.amount):,.0f}",
-                        "payment_date":   str(r.payment_date),
-                        "method":         r.payment_method or "—",
-                    }
-                    for r in result.mappings()
-                ]
+        def run():
+            try:
+                from app.core.services.repayment_service import RepaymentService
  
-            if hasattr(self, "history_table"):
-                self.after(0, lambda: self.history_table.update_rows(rows))
+                # Fetch page of rows
+                rows = RepaymentService.get_repayment_history_page(
+                    page      = page,
+                    page_size = page_size,
+                    loan_id   = filt_loan,
+                )
  
-        except Exception as e:
-            print(f"[RepaymentsScreen] Load error: {e}")
+                # Total count for pagination
+                total = RepaymentService.get_repayment_count(
+                    loan_id=filt_loan)
+ 
+                self._history_total = total
+ 
+                if hasattr(self, "history_table"):
+                    self.after(0, lambda: self.history_table.update_rows(rows))
+                self.after(0, lambda: self._update_history_pagination(
+                    total, page, page_size))
+ 
+            except Exception as e:
+                print(f"[RepaymentsScreen] Load error: {e}")
+ 
+        threading.Thread(target=run, daemon=True).start()
