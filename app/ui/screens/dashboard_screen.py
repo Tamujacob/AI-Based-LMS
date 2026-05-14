@@ -354,10 +354,12 @@ class DashboardScreen(ctk.CTkFrame):
 
         self.notif_prev_btn = ctk.CTkButton(
             page_row, text="◀ Previous",
-            width=100, height=28,
-            fg_color=COLORS["bg_input"],
-            hover_color=COLORS["accent_green"],
+            width=100, height=30,
+            fg_color="#FFFFFF",
+            hover_color=COLORS["bg_input"],
             text_color=COLORS["text_secondary"],
+            border_width=1,
+            border_color=COLORS["border"],
             font=FONTS["caption"], corner_radius=6,
             state="disabled",
             command=self._notif_prev_page,
@@ -373,10 +375,10 @@ class DashboardScreen(ctk.CTkFrame):
 
         self.notif_next_btn = ctk.CTkButton(
             page_row, text="Next ▶",
-            width=100, height=28,
-            fg_color=COLORS["bg_input"],
-            hover_color=COLORS["accent_green"],
-            text_color=COLORS["text_secondary"],
+            width=100, height=30,
+            fg_color=COLORS["accent_green"],
+            hover_color=COLORS["accent_green_dark"],
+            text_color="#FFFFFF",
             font=FONTS["caption"], corner_radius=6,
             state="disabled",
             command=self._notif_next_page,
@@ -578,82 +580,63 @@ class DashboardScreen(ctk.CTkFrame):
             notif["severity"], COLORS["text_muted"])
         is_read   = notif["is_read"]
 
+        # Row background
         bg = COLORS["bg_card"] if index % 2 == 0 else COLORS["bg_input"]
-        # Unread notifications get a slightly highlighted background
         if not is_read:
             bg = "#F0FAF0" if index % 2 == 0 else "#E8F5E8"
 
+        # Fixed-height compact row — 38px keeps all rows uniform
         row = ctk.CTkFrame(
             self.notif_container,
             fg_color=bg,
             corner_radius=0,
+            height=38,
         )
         row.pack(fill="x")
+        row.pack_propagate(False)   # enforce fixed height
 
-        # Left accent bar — colour by severity
-        accent = ctk.CTkFrame(
-            row, fg_color=sev_color, width=4, corner_radius=0)
-        accent.pack(side="left", fill="y")
+        # Left accent bar (4px wide, severity colour)
+        ctk.CTkFrame(
+            row, fg_color=sev_color, width=4, corner_radius=0,
+        ).pack(side="left", fill="y")
 
-        # Unread dot
-        if not is_read:
-            ctk.CTkLabel(
-                row, text="●",
-                font=("Helvetica", 8),
-                text_color=COLORS["accent_green"],
-                width=10,
-            ).pack(side="left", padx=(4, 0))
-        else:
-            ctk.CTkLabel(
-                row, text=" ",
-                width=14,
-            ).pack(side="left")
-
-        # Type badge — use a light background mapped from the type color
-        # Tkinter does NOT support 8-digit hex (#RRGGBBAA) — use explicit light colors
-        _TYPE_BG = {
-            "#C0392B": "#FDEDEC",   # loan_overdue     — light red
-            "#E67E22": "#FEF9E7",   # instalment_overdue — light orange
-            "#2980B9": "#EBF5FB",   # instalment_upcoming — light blue
-            "#8E44AD": "#F5EEF8",   # late_payment_fee  — light purple
-        }
-        type_bg = _TYPE_BG.get(cfg["color"], COLORS.get("bg_input", "#F7FAFC"))
-
-        type_frame = ctk.CTkFrame(
-            row,
-            fg_color=type_bg,
-            corner_radius=6,
-            width=130,
-        )
-        type_frame.pack(side="left", padx=(4, 8), pady=8)
-        type_frame.pack_propagate(False)
+        # Unread dot — use bg color to "hide" it when read (transparent not allowed)
         ctk.CTkLabel(
-            type_frame,
-            text=f"{cfg['icon']}  {cfg['label']}",
+            row,
+            text="●" if not is_read else " ",
+            font=("Helvetica", 8),
+            text_color=COLORS["accent_green"] if not is_read else bg,
+            width=12,
+        ).pack(side="left", padx=(4, 0))
+
+        # Type label — plain text, no frame, no background
+        ctk.CTkLabel(
+            row,
+            text=f"{cfg['icon']} {cfg['label']}",
             font=FONTS["caption"],
             text_color=cfg["color"],
+            width=130,
             anchor="w",
-        ).pack(padx=8, pady=4, fill="x")
+        ).pack(side="left", padx=(4, 8))
 
-        # Message (first line only — truncated)
-        first_line = notif["message"].split("\n")[0][:60]
-        if len(notif["message"].split("\n")[0]) > 60:
+        # Message — first line, truncated, clickable
+        first_line = notif["message"].split("\n")[0][:58]
+        if len(notif["message"].split("\n")[0]) > 58:
             first_line += "…"
 
-        msg_btn = ctk.CTkButton(
+        ctk.CTkButton(
             row,
             text=first_line,
             font=FONTS["body_small"],
-            text_color=(COLORS["text_primary"]
-                        if not is_read
+            text_color=(COLORS["text_primary"] if not is_read
                         else COLORS["text_secondary"]),
             fg_color="transparent",
             hover_color=COLORS["bg_input"],
             anchor="w",
-            width=380,
+            width=340,
+            height=30,
             command=lambda n=notif: self._show_notif_detail(n),
-        )
-        msg_btn.pack(side="left", padx=(0, 8))
+        ).pack(side="left", padx=(0, 8))
 
         # Date
         ctk.CTkLabel(
@@ -665,34 +648,24 @@ class DashboardScreen(ctk.CTkFrame):
             anchor="w",
         ).pack(side="left", padx=(0, 8))
 
-        # Severity badge — same fix: map severity to explicit light bg color
-        _SEV_BG = {
-            "CRITICAL": "#FDEDEC",
-            "HIGH":     "#FDEDEC",
-            "MEDIUM":   "#FEF9E7",
-            "LOW":      "#FEFAE7",
-            "UPCOMING": "#EBF5FB",
-        }
-        sev_bg = _SEV_BG.get(notif["severity"], COLORS.get("bg_input", "#F7FAFC"))
-
+        # Severity badge — small white pill with coloured text
         ctk.CTkLabel(
             row,
             text=notif["severity"],
             font=FONTS["caption"],
             text_color=sev_color,
-            fg_color=sev_bg,
+            fg_color=COLORS["bg_card"],
             corner_radius=4,
-            width=80,
-            padx=6, pady=2,
-        ).pack(side="left", padx=(0, 8))
+            width=72,
+        ).pack(side="left", padx=(0, 6))
 
-        # Mark read button
+        # Mark read button — white background, green on hover
         if not is_read:
             ctk.CTkButton(
                 row,
                 text="✓ Read",
-                width=64, height=24,
-                fg_color=COLORS["bg_card"],
+                width=60, height=24,
+                fg_color="#FFFFFF",
                 hover_color=COLORS["accent_green"],
                 text_color=COLORS["text_secondary"],
                 font=FONTS["caption"],
@@ -700,7 +673,7 @@ class DashboardScreen(ctk.CTkFrame):
                 border_width=1,
                 border_color=COLORS["border"],
                 command=lambda nid=notif["id"]: self._mark_one_read(nid),
-            ).pack(side="right", padx=8, pady=6)
+            ).pack(side="right", padx=8)
 
     def _show_notif_detail(self, notif: dict):
         """Show full notification message in a popup."""
@@ -805,7 +778,7 @@ class DashboardScreen(ctk.CTkFrame):
         ).pack(pady=20)
 
     def _update_pagination_controls(self, total: int):
-        """Update page label and prev/next button states."""
+        """Update page label and prev/next button states and colours."""
         page_size   = self._notif_page_size
         total_pages = max(1, (total + page_size - 1) // page_size)
         page        = self._notif_page
@@ -820,10 +793,23 @@ class DashboardScreen(ctk.CTkFrame):
                 text=f"Page {page} of {total_pages}  "
                      f"({start}–{end} of {total})")
 
+        # Previous — white when enabled, greyed when disabled
+        prev_enabled = page > 1
         self.notif_prev_btn.configure(
-            state="normal" if page > 1 else "disabled")
+            state="normal" if prev_enabled else "disabled",
+            fg_color="#FFFFFF" if prev_enabled else COLORS["bg_input"],
+            text_color=(COLORS["text_secondary"] if prev_enabled
+                        else COLORS["text_muted"]),
+        )
+
+        # Next — green when enabled, greyed when disabled
+        next_enabled = page < total_pages
         self.notif_next_btn.configure(
-            state="normal" if page < total_pages else "disabled")
+            state="normal" if next_enabled else "disabled",
+            fg_color=(COLORS["accent_green"] if next_enabled
+                      else COLORS["bg_input"]),
+            text_color="#FFFFFF" if next_enabled else COLORS["text_muted"],
+        )
 
     # ══════════════════════════════════════════════════════════════════════════
     # Dashboard data fetch
