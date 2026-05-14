@@ -688,15 +688,17 @@ class DashboardScreen(ctk.CTkFrame):
         popup.title(f"{cfg['icon']} {cfg['label']}")
         popup.geometry("520x340")
         popup.resizable(False, False)
-        popup.grab_set()
         popup.attributes("-topmost", True)
         popup.configure(fg_color=COLORS["bg_card"])
 
-        # Update position to center
+        # Centre the popup — must happen before grab_set
         popup.update_idletasks()
         x = self.winfo_rootx() + (self.winfo_width()  - 520) // 2
         y = self.winfo_rooty() + (self.winfo_height() - 340) // 2
         popup.geometry(f"520x340+{x}+{y}")
+
+        # grab_set AFTER update_idletasks so window is viewable
+        popup.after(50, popup.grab_set)
 
         # Header
         hdr = ctk.CTkFrame(popup, fg_color=sev_color, height=44,
