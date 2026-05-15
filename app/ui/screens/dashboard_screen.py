@@ -446,7 +446,8 @@ class DashboardScreen(ctk.CTkFrame):
     # ── Notification data fetching ─────────────────────────────────────────
 
     def _fetch_notifications(self):
-        """Fetch notifications from DB with filter and pagination."""
+        """Fetch notifications from DB with filter and pagination.
+        Joins loans + clients to include client name, loan number, and NIN."""
         try:
             from app.database.connection import get_db
             from sqlalchemy import text
@@ -462,15 +463,14 @@ class DashboardScreen(ctk.CTkFrame):
             }
 
             if filt == "unread":
-                where_clauses.append("is_read = false")
+                where_clauses.append("an.is_read = false")
             elif filt == "week":
-                where_clauses.append("notif_date >= :week_start")
+                where_clauses.append("an.notif_date >= :week_start")
                 params["week_start"] = str(
                     date.today() - timedelta(days=7))
             elif filt in NOTIF_CONFIG:
-                where_clauses.append("notif_type = :ntype")
+                where_clauses.append("an.notif_type = :ntype")
                 params["ntype"] = filt
-            # "all" → no extra filter
 
             where_sql = (
                 "WHERE " + " AND ".join(where_clauses)
@@ -478,35 +478,50 @@ class DashboardScreen(ctk.CTkFrame):
             )
 
             with get_db() as db:
-                # Total count for pagination
+                # Total count
                 count_sql = text(f"""
-                    SELECT COUNT(*) FROM agent_notifications
+                    SELECT COUNT(*)
+                    FROM   agent_notifications an
                     {where_sql}
                 """)
                 total = db.execute(count_sql, params).scalar() or 0
 
-                # Fetch page
+                # Fetch page — join loans + clients for identity fields
                 data_sql = text(f"""
-                    SELECT id, loan_id, notif_type, notif_date,
-                           severity, message, is_read, created_at
-                    FROM   agent_notifications
+                    SELECT
+                        an.id,
+                        an.loan_id,
+                        an.notif_type,
+                        an.notif_date,
+                        an.severity,
+                        an.message,
+                        an.is_read,
+                        an.created_at,
+                        l.loan_number,
+                        c.full_name   AS client_name,
+                        c.nin         AS client_nin,
+                        c.phone_number AS client_phone
+                    FROM   agent_notifications an
+                    LEFT JOIN loans   l ON an.loan_id   = l.id
+                    LEFT JOIN clients c ON l.client_id  = c.id
                     {where_sql}
-                    ORDER  BY
-                        CASE severity
-                            WHEN 'CRITICAL'  THEN 1
-                            WHEN 'HIGH'      THEN 2
-                            WHEN 'MEDIUM'    THEN 3
-                            WHEN 'UPCOMING'  THEN 4
+                    ORDER BY
+                        CASE an.severity
+                            WHEN 'CRITICAL' THEN 1
+                            WHEN 'HIGH'     THEN 2
+                            WHEN 'MEDIUM'   THEN 3
+                            WHEN 'UPCOMING' THEN 4
                             ELSE 5
                         END,
-                        created_at DESC
+                        an.created_at DESC
                     LIMIT  :limit OFFSET :offset
                 """)
                 rows = db.execute(data_sql, params).mappings().fetchall()
                 notifications = [dict(r) for r in rows]
 
             self._notif_total = total
-            self.after(0, lambda: self._render_notifications(notifications, total))
+            self.after(0, lambda: self._render_notifications(
+                notifications, total))
 
         except Exception as e:
             print(f"[Dashboard] fetch_notifications error: {e}")
@@ -549,11 +564,14 @@ class DashboardScreen(ctk.CTkFrame):
         col_hdr.pack_propagate(False)
 
         for col_text, width in [
-            ("Type",     140),
-            ("Message",  380),
-            ("Date",      90),
-            ("Severity",  90),
-            ("",          80),   # action button column
+            ("Type",        120),
+            ("Loan No.",     90),
+            ("Client",      120),
+            ("NIN",         110),
+            ("Message",     200),
+            ("Date",         90),
+            ("Severity",     72),
+            ("",             68),
         ]:
             ctk.CTkLabel(
                 col_hdr, text=col_text,
@@ -609,19 +627,52 @@ class DashboardScreen(ctk.CTkFrame):
             width=12,
         ).pack(side="left", padx=(4, 0))
 
-        # Type label — plain text, no frame, no background
+        # Type label
         ctk.CTkLabel(
             row,
             text=f"{cfg['icon']} {cfg['label']}",
             font=FONTS["caption"],
             text_color=cfg["color"],
-            width=130,
+            width=120,
             anchor="w",
-        ).pack(side="left", padx=(4, 8))
+        ).pack(side="left", padx=(4, 4))
+
+        # Loan number — green, compact
+        loan_num = notif.get("loan_number") or "—"
+        ctk.CTkLabel(
+            row,
+            text=loan_num,
+            font=FONTS["caption"],
+            text_color=COLORS["accent_green_dark"],
+            width=90,
+            anchor="w",
+        ).pack(side="left", padx=(0, 4))
+
+        # Client name
+        client_name = notif.get("client_name") or "—"
+        ctk.CTkLabel(
+            row,
+            text=client_name[:18],
+            font=FONTS["caption"],
+            text_color=COLORS["text_primary"],
+            width=120,
+            anchor="w",
+        ).pack(side="left", padx=(0, 4))
+
+        # NIN
+        nin = notif.get("client_nin") or "—"
+        ctk.CTkLabel(
+            row,
+            text=nin,
+            font=FONTS["caption"],
+            text_color=COLORS["text_muted"],
+            width=110,
+            anchor="w",
+        ).pack(side="left", padx=(0, 4))
 
         # Message — first line, truncated, clickable
-        first_line = notif["message"].split("\n")[0][:58]
-        if len(notif["message"].split("\n")[0]) > 58:
+        first_line = notif["message"].split("\n")[0][:38]
+        if len(notif["message"].split("\n")[0]) > 38:
             first_line += "…"
 
         ctk.CTkButton(
@@ -633,7 +684,7 @@ class DashboardScreen(ctk.CTkFrame):
             fg_color="transparent",
             hover_color=COLORS["bg_input"],
             anchor="w",
-            width=340,
+            width=200,
             height=30,
             command=lambda n=notif: self._show_notif_detail(n),
         ).pack(side="left", padx=(0, 8))
@@ -677,87 +728,130 @@ class DashboardScreen(ctk.CTkFrame):
 
     def _show_notif_detail(self, notif: dict):
         """Show full notification message in a popup."""
-        cfg       = NOTIF_CONFIG.get(notif["notif_type"], {
+        import tkinter as tk
+
+        cfg = NOTIF_CONFIG.get(notif["notif_type"], {
             "label": notif["notif_type"].replace("_", " ").title(),
             "icon":  "ℹ",
             "color": COLORS["text_secondary"],
         })
-        sev_color = SEVERITY_COLORS.get(notif["severity"], COLORS["text_muted"])
+        sev_color    = SEVERITY_COLORS.get(notif["severity"], "#718096")
+        loan_num     = notif.get("loan_number")   or "—"
+        client_name  = notif.get("client_name")   or "—"
+        client_nin   = notif.get("client_nin")    or "—"
+        client_phone = notif.get("client_phone")  or "—"
 
-        popup = ctk.CTkToplevel(self)
+        # Use standard tk.Toplevel — reliable on all platforms including Linux
+        popup = tk.Toplevel(self)
         popup.title(f"{cfg['icon']} {cfg['label']}")
-        popup.geometry("520x340")
+        popup.configure(bg=COLORS.get("bg_card", "#FFFFFF"))
         popup.resizable(False, False)
-        popup.attributes("-topmost", True)
-        popup.configure(fg_color=COLORS["bg_card"])
 
-        # Centre the popup — must happen before grab_set
+        # Position centred over the app window
         popup.update_idletasks()
-        x = self.winfo_rootx() + (self.winfo_width()  - 520) // 2
-        y = self.winfo_rooty() + (self.winfo_height() - 340) // 2
-        popup.geometry(f"520x340+{x}+{y}")
+        pw, ph = 580, 400
+        x = self.winfo_rootx() + (self.winfo_width()  - pw) // 2
+        y = self.winfo_rooty() + (self.winfo_height() - ph) // 2
+        popup.geometry(f"{pw}x{ph}+{x}+{y}")
+        popup.attributes("-topmost", True)
 
-        # grab_set AFTER update_idletasks so window is viewable
-        popup.after(50, popup.grab_set)
-
-        # Header
-        hdr = ctk.CTkFrame(popup, fg_color=sev_color, height=44,
-                           corner_radius=0)
+        # ── Header bar ────────────────────────────────────────────────────
+        hdr = tk.Frame(popup, bg=sev_color, height=46)
         hdr.pack(fill="x")
         hdr.pack_propagate(False)
-        ctk.CTkLabel(
+
+        tk.Label(
             hdr,
             text=f"{cfg['icon']}  {cfg['label']}  —  {notif['severity']}",
-            font=FONTS["subheading"],
-            text_color="#FFFFFF",
-        ).pack(side="left", padx=16, fill="y")
-        ctk.CTkLabel(
+            bg=sev_color, fg="#FFFFFF",
+            font=("Helvetica", 12, "bold"),
+        ).pack(side="left", padx=16, pady=8)
+
+        tk.Label(
             hdr,
             text=str(notif["notif_date"]),
-            font=FONTS["caption"],
-            text_color="#FFFFFF",
-        ).pack(side="right", padx=16, fill="y")
+            bg=sev_color, fg="#FFFFFF",
+            font=("Helvetica", 10),
+        ).pack(side="right", padx=16, pady=8)
 
-        # Message body
-        body = ctk.CTkTextbox(
-            popup,
-            font=("Courier", 11),
-            fg_color=COLORS["bg_input"],
-            text_color=COLORS["text_primary"],
+        # ── Identity bar ──────────────────────────────────────────────────
+        id_bg = COLORS.get("bg_input", "#F7FAFC")
+        id_bar = tk.Frame(popup, bg=id_bg, height=30)
+        id_bar.pack(fill="x")
+        id_bar.pack_propagate(False)
+
+        tk.Label(
+            id_bar,
+            text=(f"  Loan: {loan_num}     "
+                  f"Client: {client_name}     "
+                  f"NIN: {client_nin}     "
+                  f"Phone: {client_phone}"),
+            bg=id_bg,
+            fg=COLORS.get("text_secondary", "#4A5568"),
+            font=("Helvetica", 9),
+            anchor="w",
+        ).pack(side="left", padx=8, fill="y")
+
+        # ── Message body ──────────────────────────────────────────────────
+        body_frame = tk.Frame(popup, bg=id_bg)
+        body_frame.pack(fill="both", expand=True, padx=12, pady=8)
+
+        scrollbar = tk.Scrollbar(body_frame)
+        scrollbar.pack(side="right", fill="y")
+
+        body = tk.Text(
+            body_frame,
+            font=("Courier", 10),
+            bg=id_bg,
+            fg=COLORS.get("text_primary", "#1A202C"),
             wrap="word",
-            corner_radius=0,
+            relief="flat",
+            bd=0,
+            yscrollcommand=scrollbar.set,
+            state="normal",
         )
-        body.pack(fill="both", expand=True, padx=16, pady=12)
+        body.pack(side="left", fill="both", expand=True)
         body.insert("end", notif["message"])
         body.configure(state="disabled")
+        scrollbar.config(command=body.yview)
 
-        # Buttons
-        btn_row = ctk.CTkFrame(popup, fg_color="transparent")
-        btn_row.pack(fill="x", padx=16, pady=(0, 12))
+        # ── Buttons ───────────────────────────────────────────────────────
+        btn_frame = tk.Frame(
+            popup, bg=COLORS.get("bg_card", "#FFFFFF"), pady=8)
+        btn_frame.pack(fill="x", padx=12)
 
-        ctk.CTkButton(
-            btn_row, text="Close",
-            height=32, width=100,
-            fg_color=COLORS["bg_input"],
-            hover_color=COLORS["border"],
-            text_color=COLORS["text_secondary"],
-            font=FONTS["body_small"], corner_radius=6,
+        tk.Button(
+            btn_frame,
+            text="Close",
+            bg=COLORS.get("bg_input", "#F7FAFC"),
+            fg=COLORS.get("text_secondary", "#4A5568"),
+            font=("Helvetica", 10),
+            relief="flat", bd=1,
+            padx=16, pady=6,
+            cursor="hand2",
             command=popup.destroy,
         ).pack(side="right", padx=(6, 0))
 
         if not notif["is_read"]:
-            ctk.CTkButton(
-                btn_row, text="✓ Mark as read",
-                height=32, width=130,
-                fg_color=COLORS["accent_green"],
-                hover_color=COLORS["accent_green_dark"],
-                text_color="#FFFFFF",
-                font=FONTS["body_small"], corner_radius=6,
+            tk.Button(
+                btn_frame,
+                text="✓ Mark as read",
+                bg=COLORS.get("accent_green", "#276749"),
+                fg="#FFFFFF",
+                font=("Helvetica", 10, "bold"),
+                relief="flat", bd=0,
+                padx=16, pady=6,
+                cursor="hand2",
                 command=lambda: (
                     self._mark_one_read(notif["id"]),
                     popup.destroy(),
                 ),
             ).pack(side="right")
+
+        # ── Show and grab ─────────────────────────────────────────────────
+        popup.focus_force()
+        popup.grab_set()
+        popup.wait_window()
 
     def _mark_one_read(self, notif_id: int):
         def run():
