@@ -12,6 +12,15 @@ v2 changes:
   - Notifications paginated: 25 per page, filterable by week
   - Mark as read / Mark all read buttons
   - Severity colour coding per notification type
+
+v3 fixes:
+  - Popup grab_set() removed — was blocking all subsequent notification clicks
+  - Popup tracker added — prevents duplicate popups for the same notification
+  - Reminder banner now hides itself when count drops to zero on refresh
+  - sqlalchemy text import aliased to sa_text — no longer shadows local 'text' variable
+  - client_name truncation now appends ellipsis when cut
+  - loan_type guard made explicit (handles raw strings safely)
+  - _load_reminder_badge and _fetch_and_update banner calls unified with priority
 """
 
 import threading
@@ -75,6 +84,14 @@ class DashboardScreen(ctk.CTkFrame):
         self._notif_page_size   = 10
         self._notif_filter      = "all"   # "all" | "week" | "unread"
         self._notif_total       = 0
+
+        # Tracks open detail popups keyed by notification id
+        # so we never open a duplicate and can close stale ones
+        self._open_popups: dict = {}
+
+        # Reminder banner state — tracks which source set it last
+        # priority: 0 = none, 1 = reminder_service, 2 = overdue loans
+        self._banner_priority   = 0
 
         self._build()
         threading.Thread(target=self._fetch_and_update, daemon=True).start()
@@ -189,10 +206,20 @@ class DashboardScreen(ctk.CTkFrame):
             command=lambda: self._navigate("agent"),
         ).pack(padx=16, pady=(0, 10))
 
-    def _show_reminder_banner(self, text):
-        self.reminder_label.configure(text=text)
-        self.reminder_banner.grid(
-            row=3, column=0, sticky="ew", padx=28, pady=(12, 0))
+    def _show_reminder_banner(self, text, priority: int = 1):
+        """Show the reminder banner. Higher priority wins; pass text=None to hide."""
+        if text is None:
+            # Only hide if nothing higher-priority is showing
+            if priority >= self._banner_priority:
+                self._banner_priority = 0
+                self.reminder_banner.grid_remove()
+            return
+
+        if priority >= self._banner_priority:
+            self._banner_priority = priority
+            self.reminder_label.configure(text=text)
+            self.reminder_banner.grid(
+                row=3, column=0, sticky="ew", padx=28, pady=(12, 0))
 
     # ── Loan status row ────────────────────────────────────────────────────
 
@@ -254,7 +281,7 @@ class DashboardScreen(ctk.CTkFrame):
             w.bind("<Button-1>", on_click)
 
     # ══════════════════════════════════════════════════════════════════════════
-    # Notifications panel  (replaces Recent Repayments)
+    # Notifications panel
     # ══════════════════════════════════════════════════════════════════════════
 
     def _build_notifications_panel(self):
@@ -450,7 +477,7 @@ class DashboardScreen(ctk.CTkFrame):
         Joins loans + clients to include client name, loan number, and NIN."""
         try:
             from app.database.connection import get_db
-            from sqlalchemy import text
+            from sqlalchemy import text as sa_text
 
             offset = (self._notif_page - 1) * self._notif_page_size
             filt   = self._notif_filter
@@ -479,7 +506,7 @@ class DashboardScreen(ctk.CTkFrame):
 
             with get_db() as db:
                 # Total count
-                count_sql = text(f"""
+                count_sql = sa_text(f"""
                     SELECT COUNT(*)
                     FROM   agent_notifications an
                     {where_sql}
@@ -487,7 +514,7 @@ class DashboardScreen(ctk.CTkFrame):
                 total = db.execute(count_sql, params).scalar() or 0
 
                 # Fetch page — join loans + clients for identity fields
-                data_sql = text(f"""
+                data_sql = sa_text(f"""
                     SELECT
                         an.id,
                         an.loan_id,
@@ -588,7 +615,13 @@ class DashboardScreen(ctk.CTkFrame):
         self._update_pagination_controls(total)
 
     def _render_notif_row(self, notif: dict, index: int):
-        """Render a single notification row."""
+        """Render a single notification row.
+
+        Click handling: the entire row (frame + every child label) is bound
+        to <Button-1> so a touchpad tap anywhere on the row opens the detail
+        popup.  The "✓ Read" button is excluded from that binding so it keeps
+        its own independent action.
+        """
         cfg       = NOTIF_CONFIG.get(notif["notif_type"], {
             "label": notif["notif_type"].replace("_", " ").title(),
             "icon":  "ℹ",
@@ -599,26 +632,28 @@ class DashboardScreen(ctk.CTkFrame):
         is_read   = notif["is_read"]
 
         # Row background
-        bg = COLORS["bg_card"] if index % 2 == 0 else COLORS["bg_input"]
+        bg      = COLORS["bg_card"] if index % 2 == 0 else COLORS["bg_input"]
+        hover_bg = "#D6EFD6"   # consistent hover colour regardless of read state
         if not is_read:
             bg = "#F0FAF0" if index % 2 == 0 else "#E8F5E8"
 
-        # Fixed-height compact row — 38px keeps all rows uniform
+        # Fixed-height compact row — 44px (slightly taller = easier to tap)
         row = ctk.CTkFrame(
             self.notif_container,
             fg_color=bg,
             corner_radius=0,
-            height=38,
+            height=44,
+            cursor="hand2",
         )
         row.pack(fill="x")
-        row.pack_propagate(False)   # enforce fixed height
+        row.pack_propagate(False)
 
-        # Left accent bar (4px wide, severity colour)
+        # Left accent bar (4 px, severity colour) — not clickable for detail
         ctk.CTkFrame(
             row, fg_color=sev_color, width=4, corner_radius=0,
         ).pack(side="left", fill="y")
 
-        # Unread dot — use bg color to "hide" it when read (transparent not allowed)
+        # Unread dot
         ctk.CTkLabel(
             row,
             text="●" if not is_read else " ",
@@ -637,7 +672,7 @@ class DashboardScreen(ctk.CTkFrame):
             anchor="w",
         ).pack(side="left", padx=(4, 4))
 
-        # Loan number — green, compact
+        # Loan number
         loan_num = notif.get("loan_number") or "—"
         ctk.CTkLabel(
             row,
@@ -648,11 +683,12 @@ class DashboardScreen(ctk.CTkFrame):
             anchor="w",
         ).pack(side="left", padx=(0, 4))
 
-        # Client name
-        client_name = notif.get("client_name") or "—"
+        # Client name — truncated with ellipsis when over 18 chars
+        raw_name    = notif.get("client_name") or "—"
+        client_name = (raw_name[:17] + "…") if len(raw_name) > 18 else raw_name
         ctk.CTkLabel(
             row,
-            text=client_name[:18],
+            text=client_name,
             font=FONTS["caption"],
             text_color=COLORS["text_primary"],
             width=120,
@@ -670,23 +706,19 @@ class DashboardScreen(ctk.CTkFrame):
             anchor="w",
         ).pack(side="left", padx=(0, 4))
 
-        # Message — first line, truncated, clickable
+        # Message preview — plain label (no button; row itself is clickable)
         first_line = notif["message"].split("\n")[0][:38]
         if len(notif["message"].split("\n")[0]) > 38:
             first_line += "…"
 
-        ctk.CTkButton(
+        ctk.CTkLabel(
             row,
             text=first_line,
             font=FONTS["body_small"],
             text_color=(COLORS["text_primary"] if not is_read
                         else COLORS["text_secondary"]),
-            fg_color="transparent",
-            hover_color=COLORS["bg_input"],
-            anchor="w",
             width=200,
-            height=30,
-            command=lambda n=notif: self._show_notif_detail(n),
+            anchor="w",
         ).pack(side="left", padx=(0, 8))
 
         # Date
@@ -699,7 +731,7 @@ class DashboardScreen(ctk.CTkFrame):
             anchor="w",
         ).pack(side="left", padx=(0, 8))
 
-        # Severity badge — small white pill with coloured text
+        # Severity badge
         ctk.CTkLabel(
             row,
             text=notif["severity"],
@@ -710,12 +742,13 @@ class DashboardScreen(ctk.CTkFrame):
             width=72,
         ).pack(side="left", padx=(0, 6))
 
-        # Mark read button — white background, green on hover
+        # "✓ Read" button — pack first so side="right" lands before row binding
+        read_btn = None
         if not is_read:
-            ctk.CTkButton(
+            read_btn = ctk.CTkButton(
                 row,
                 text="✓ Read",
-                width=60, height=24,
+                width=60, height=28,
                 fg_color="#FFFFFF",
                 hover_color=COLORS["accent_green"],
                 text_color=COLORS["text_secondary"],
@@ -724,11 +757,54 @@ class DashboardScreen(ctk.CTkFrame):
                 border_width=1,
                 border_color=COLORS["border"],
                 command=lambda nid=notif["id"]: self._mark_one_read(nid),
-            ).pack(side="right", padx=8)
+            )
+            read_btn.pack(side="right", padx=8)
+
+        # ── Bind entire row to open the detail popup ──────────────────────
+        # Collect every child widget except the "✓ Read" button so that
+        # clicking anywhere else on the row fires the popup.
+        def _open(_e, n=notif):
+            self._show_notif_detail(n)
+
+        def _highlight(_e):
+            row.configure(fg_color=hover_bg)
+
+        def _unhighlight(_e):
+            row.configure(fg_color=bg)
+
+        clickable = [row] + [
+            w for w in row.winfo_children()
+            if w is not read_btn
+        ]
+        for widget in clickable:
+            widget.bind("<Button-1>", _open)
+            widget.bind("<Enter>",    _highlight)
+            widget.bind("<Leave>",    _unhighlight)
 
     def _show_notif_detail(self, notif: dict):
-        """Show full notification message in a popup."""
+        """Show full notification message in a popup.
+
+        FIX: grab_set() removed — it was blocking all click events on every
+        other notification after the first popup was opened, making it appear
+        as though only one popup would ever open.  Each popup is now tracked
+        in self._open_popups so duplicates are raised rather than reopened.
+        """
         import tkinter as tk
+
+        notif_id = notif["id"]
+
+        # If a popup for this notification is already open, just raise it
+        existing = self._open_popups.get(notif_id)
+        if existing is not None:
+            try:
+                if existing.winfo_exists():
+                    existing.lift()
+                    existing.focus_force()
+                    return
+            except Exception:
+                pass
+            # Window gone — remove stale entry and fall through to create
+            del self._open_popups[notif_id]
 
         cfg = NOTIF_CONFIG.get(notif["notif_type"], {
             "label": notif["notif_type"].replace("_", " ").title(),
@@ -741,11 +817,20 @@ class DashboardScreen(ctk.CTkFrame):
         client_nin   = notif.get("client_nin")    or "—"
         client_phone = notif.get("client_phone")  or "—"
 
-        # Use standard tk.Toplevel — reliable on all platforms including Linux
         popup = tk.Toplevel(self)
         popup.title(f"{cfg['icon']} {cfg['label']}")
         popup.configure(bg=COLORS.get("bg_card", "#FFFFFF"))
         popup.resizable(False, False)
+
+        # Track this popup; clean up the dict entry when it closes
+        self._open_popups[notif_id] = popup
+        popup.protocol(
+            "WM_DELETE_WINDOW",
+            lambda: (
+                self._open_popups.pop(notif_id, None),
+                popup.destroy(),
+            ),
+        )
 
         # Position centred over the app window
         popup.update_idletasks()
@@ -820,6 +905,10 @@ class DashboardScreen(ctk.CTkFrame):
             popup, bg=COLORS.get("bg_card", "#FFFFFF"), pady=8)
         btn_frame.pack(fill="x", padx=12)
 
+        def _close():
+            self._open_popups.pop(notif_id, None)
+            popup.destroy()
+
         tk.Button(
             btn_frame,
             text="Close",
@@ -829,7 +918,7 @@ class DashboardScreen(ctk.CTkFrame):
             relief="flat", bd=1,
             padx=16, pady=6,
             cursor="hand2",
-            command=popup.destroy,
+            command=_close,
         ).pack(side="right", padx=(6, 0))
 
         if not notif["is_read"]:
@@ -844,13 +933,13 @@ class DashboardScreen(ctk.CTkFrame):
                 cursor="hand2",
                 command=lambda: (
                     self._mark_one_read(notif["id"]),
-                    popup.destroy(),
+                    _close(),
                 ),
             ).pack(side="right")
 
-        # ── Show and grab ─────────────────────────────────────────────────
         popup.focus_force()
-        popup.grab_set()
+        # NOTE: grab_set() intentionally removed — it blocked all subsequent
+        # notification click events until the first popup was closed.
 
     def _mark_one_read(self, notif_id: int):
         def run():
@@ -915,10 +1004,10 @@ class DashboardScreen(ctk.CTkFrame):
             from app.database.connection import get_db
             from app.core.models.loan    import Loan, LoanStatus
             from app.core.models.client  import Client
-            from sqlalchemy              import text
+            from sqlalchemy              import text as sa_text
 
             with get_db() as db:
-                dashboard_sql = text("""
+                dashboard_sql = sa_text("""
                     WITH loan_stats AS (
                         SELECT
                             COUNT(*) as total_loans,
@@ -972,15 +1061,21 @@ class DashboardScreen(ctk.CTkFrame):
                     self.card_clients.update_value(str(client_count))
                     for key, lbl in self.status_labels.items():
                         lbl.configure(text=str(status_counts.get(key, 0)))
+
+                    # Show or hide the overdue banner (priority 2)
+                    if overdue_count > 0:
+                        banner_msg = (
+                            f"⚠  {overdue_count} loan(s) are overdue — "
+                            f"check Agent Notifications below"
+                        )
+                        self._show_reminder_banner(banner_msg, priority=2)
+                    else:
+                        self._show_reminder_banner(None, priority=2)
+
                 except Exception as e:
                     print(f"[Dashboard] UI update error: {e}")
 
             self.after(0, _update)
-
-            if overdue_count > 0:
-                text = (f"⚠  {overdue_count} loan(s) are overdue — "
-                        f"check Agent Notifications below")
-                self.after(0, lambda: self._show_reminder_banner(text))
 
         except Exception as e:
             print(f"[Dashboard] Fetch error: {e}")
@@ -1121,8 +1216,16 @@ class DashboardScreen(ctk.CTkFrame):
                         self._loans_panel, fg_color=bg, height=36)
                     r.pack(fill="x")
                     r.pack_propagate(False)
-                    lt = row.loan_type.value if row.loan_type else "—"
-                    for j, (text, width) in enumerate([
+
+                    # Explicit guard: handle both enum and raw-string loan_type
+                    if row.loan_type is None:
+                        lt = "—"
+                    elif hasattr(row.loan_type, "value"):
+                        lt = row.loan_type.value
+                    else:
+                        lt = str(row.loan_type)
+
+                    for j, (cell_text, width) in enumerate([
                         (row.loan_number,                           130),
                         (row.full_name or "—",                     190),
                         (lt,                                        150),
@@ -1130,7 +1233,7 @@ class DashboardScreen(ctk.CTkFrame):
                         (str(row.due_date) if row.due_date else "—", 110),
                     ]):
                         ctk.CTkLabel(
-                            r, text=text, font=FONTS["body_small"],
+                            r, text=cell_text, font=FONTS["body_small"],
                             text_color=COLORS["text_primary"],
                             width=width, anchor="w",
                         ).pack(side="left",
@@ -1185,10 +1288,18 @@ class DashboardScreen(ctk.CTkFrame):
                     parts.append(f"{overdue} overdue")
                 if urgent:
                     parts.append(f"{urgent} urgent")
-                text = (
+                banner_msg = (
                     f"⚠  Payment reminders: {', '.join(parts)}  —  "
                     f"{total} loan(s) due soon"
                 )
-                self.after(0, lambda: self._show_reminder_banner(text))
+                self.after(
+                    0,
+                    lambda: self._show_reminder_banner(banner_msg, priority=1),
+                )
+            else:
+                self.after(
+                    0,
+                    lambda: self._show_reminder_banner(None, priority=1),
+                )
         except Exception:
             pass
