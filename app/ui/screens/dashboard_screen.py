@@ -72,7 +72,7 @@ class DashboardScreen(ctk.CTkFrame):
 
         # Notification pagination state
         self._notif_page        = 1
-        self._notif_page_size   = 25
+        self._notif_page_size   = 10
         self._notif_filter      = "all"   # "all" | "week" | "unread"
         self._notif_total       = 0
 
@@ -851,7 +851,6 @@ class DashboardScreen(ctk.CTkFrame):
         # ── Show and grab ─────────────────────────────────────────────────
         popup.focus_force()
         popup.grab_set()
-        popup.wait_window()
 
     def _mark_one_read(self, notif_id: int):
         def run():
