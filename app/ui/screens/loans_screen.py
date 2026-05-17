@@ -1609,4 +1609,4 @@ class LoansScreen(ctk.CTkFrame):
     def _perform_debounced_search(self):
         self.current_page = 1
         self._load_loans()
-        self._search_timer = Non
+        self._search_timer = None
