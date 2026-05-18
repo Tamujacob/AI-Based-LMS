@@ -157,8 +157,8 @@ class LoanCeilingEngine:
         net_flow      = Decimal("0")
         income_source = "stated"
  
-        if statement_result and hasattr(statement_result, "avg_monthly_net"):
-            net_flow      = Decimal(str(statement_result.avg_monthly_net))
+        if statement_result and hasattr(statement_result, "net_monthly_flow"):
+            net_flow      = Decimal(str(statement_result.net_monthly_flow))
             income_source = "statement"
  
             # Red flags from statement
@@ -254,7 +254,7 @@ class LoanCeilingEngine:
         net_flow: Decimal,
     ) -> LoanScenario:
         principal = cls._apply_caps(principal)
-        interest  = principal * cls.INTEREST_RATE * duration   # 10% per month × months
+        interest  = principal * cls.INTEREST_RATE * Decimal(str(duration))  # 10% per month × months
         total     = principal + interest
         monthly   = total / duration if duration > 0 else total
         aff_pct   = (float(monthly) / float(net_flow) * 100) if net_flow > 0 else 0
