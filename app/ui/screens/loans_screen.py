@@ -62,7 +62,7 @@ def _to_int(raw: str) -> int:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Client picker dialog (kept for multiple-match fallback)
+# Client picker dialog (multiple-match fallback)
 # ══════════════════════════════════════════════════════════════════════════════
 
 class ClientPickerDialog(tk.Toplevel):
@@ -358,9 +358,9 @@ class LoansScreen(ctk.CTkFrame):
         self.selected_loan     = None
         self._collateral_files = []
         self.found_client_id   = None
-        self._found_client_obj = None    # full client object after selection
-        self._statement_analysed = False  # track whether statement was analysed
-        self._search_popup     = None    # live client search popup
+        self._found_client_obj = None
+        self._statement_analysed = False
+        self._search_popup     = None
 
         # Pagination
         self.current_page  = 1
@@ -615,6 +615,23 @@ class LoansScreen(ctk.CTkFrame):
                           command=lambda: self._reject_loan(loan.id),
                           **danger_button_style()).grid(
                 row=0, column=2, padx=(4, 0), sticky="ew")
+
+            # ── Admin-only delete — only shown for pending loans ───────────
+            if self.current_user and self.current_user.is_admin:
+                ctk.CTkButton(
+                    btn_frame,
+                    text="🗑  Delete Loan (Admin)",
+                    height=34,
+                    fg_color="#7B241C",
+                    hover_color="#641E16",
+                    text_color=_WHITE,
+                    font=FONTS["body_small"],
+                    corner_radius=8,
+                    command=lambda: self._delete_loan(
+                        loan.id, loan.loan_number),
+                ).grid(row=1, column=0, columnspan=3,
+                       sticky="ew", pady=(6, 0))
+
         elif loan.status.value == "active":
             ctk.CTkButton(btn_frame, text="💳  Record Payment",
                           command=lambda: self.master.show_screen("repayments"),
@@ -693,7 +710,91 @@ class LoansScreen(ctk.CTkFrame):
                 anchor="w", padx=12, pady=8)
 
     # ══════════════════════════════════════════════════════════════════════════
-    # New loan form — redesigned
+    # Delete loan — admin only, pending only
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def _delete_loan(self, loan_id: int, loan_number: str):
+        """Show confirmation dialog before deleting."""
+        dialog = tk.Toplevel(self.winfo_toplevel())
+        dialog.title("Confirm Delete")
+        dialog.resizable(False, False)
+        dialog.configure(bg=_LIGHT)
+        dialog.update_idletasks()   # must be viewable before grab_set
+        dialog.grab_set()
+
+        w, h = 380, 170
+        dialog.geometry(f"{w}x{h}")
+        dialog.update_idletasks()
+        sw, sh = dialog.winfo_screenwidth(), dialog.winfo_screenheight()
+        dialog.geometry(f"{w}x{h}+{(sw - w) // 2}+{(sh - h) // 2}")
+
+        hdr = tk.Frame(dialog, bg="#7B241C", height=44)
+        hdr.pack(fill="x")
+        hdr.pack_propagate(False)
+        tk.Label(hdr, text="🗑  Confirm Permanent Delete",
+                 bg="#7B241C", fg=_WHITE,
+                 font=("Helvetica", 11, "bold")).pack(
+            side="left", padx=16, fill="y")
+
+        tk.Label(
+            dialog,
+            text=f"Delete  {loan_number}  permanently?\nThis cannot be undone.",
+            bg=_LIGHT, fg=_TEXT,
+            font=("Helvetica", 10),
+            justify="center",
+        ).pack(pady=18)
+
+        btn_row = tk.Frame(dialog, bg=_LIGHT)
+        btn_row.pack(pady=(0, 14))
+
+        def _confirm():
+            dialog.destroy()
+            self._do_delete_loan(loan_id)
+
+        tk.Button(btn_row, text="✖  Cancel",
+                  bg=_LIGHT, fg=_TEXT,
+                  relief="flat", bd=1,
+                  font=("Helvetica", 10),
+                  padx=16, pady=6, cursor="hand2",
+                  command=dialog.destroy).pack(side="left", padx=(0, 10))
+
+        tk.Button(btn_row, text="🗑  Yes, Delete",
+                  bg="#7B241C", fg=_WHITE,
+                  activebackground="#641E16", activeforeground=_WHITE,
+                  relief="flat", bd=0,
+                  font=("Helvetica", 10, "bold"),
+                  padx=16, pady=6, cursor="hand2",
+                  command=_confirm).pack(side="left")
+
+    def _do_delete_loan(self, loan_id: int):
+        """Execute deletion after confirmation."""
+        try:
+            from app.database.connection import get_db
+            from app.core.models.loan import Loan, LoanStatus
+            from app.core.models.collateral import Collateral
+
+            with get_db() as db:
+                loan = db.query(Loan).filter_by(id=loan_id).first()
+                if loan is None:
+                    self._show_error_popup("Loan not found.")
+                    return
+                if loan.status != LoanStatus.pending:
+                    self._show_error_popup(
+                        "Only pending loans can be deleted.")
+                    return
+                # Remove collateral records first (FK constraint)
+                db.query(Collateral).filter_by(loan_id=loan_id).delete()
+                db.delete(loan)
+                db.commit()
+
+            self._load_loans()
+            self._show_empty_state()
+
+        except Exception as e:
+            self._show_error_popup(f"Could not delete loan:\n{e}")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # New loan form
     # ══════════════════════════════════════════════════════════════════════════
 
     def _new_loan_form(self, loan=None):
@@ -747,12 +848,11 @@ class LoansScreen(ctk.CTkFrame):
 
         ctk.CTkLabel(
             self.detail_panel,
-            text="Type a name or NIN — a popup will show matching clients.",
+            text="Type a name or NIN — matching clients appear in a popup.",
             font=FONTS["caption"],
             text_color=COLORS["text_muted"],
             anchor="w").pack(fill="x", padx=20, pady=(0, 4))
 
-        # Search entry
         self.client_search_var = ctk.StringVar()
         self.client_search_entry = ctk.CTkEntry(
             self.detail_panel,
@@ -760,8 +860,7 @@ class LoansScreen(ctk.CTkFrame):
             placeholder_text="Type name or NIN (min 2 characters)...",
             **input_style())
         self.client_search_entry.pack(fill="x", padx=20)
-        self.client_search_entry.bind(
-            "<KeyRelease>", self._on_client_key)
+        self.client_search_entry.bind("<KeyRelease>", self._on_client_key)
         self.client_search_entry.bind(
             "<FocusOut>",
             lambda e: self.after(300, self._close_client_popup))
@@ -779,30 +878,18 @@ class LoansScreen(ctk.CTkFrame):
             anchor="w", justify="left")
         self.client_card_label.pack(padx=12, pady=10, anchor="w")
 
-        # Monthly income (auto-filled from client, editable)
-        self._flabel("Stated Monthly Income (UGX)")
-        self.income_var = ctk.StringVar()
-        self.income_entry = ctk.CTkEntry(
-            self.detail_panel,
-            textvariable=self.income_var,
-            placeholder_text="Auto-filled from client record",
-            **input_style())
-        self.income_entry.pack(fill="x", padx=20)
-        ctk.CTkLabel(
-            self.detail_panel,
-            text="⚠  Stated income may be overstated. "
-                 "Use statement analysis for a more accurate ceiling.",
-            font=FONTS["caption"],
-            text_color=COLORS["warning"] if COLORS.get("warning") else "#D69E2E",
-            anchor="w", wraplength=280).pack(
-            fill="x", padx=20, pady=(2, 0))
+        # Stated monthly income is displayed in the client card only.
+        # It is passed to auto_score_loan via _apply_client_selection.
+        # The statement widget provides a more accurate ceiling if uploaded.
+        self.income_var = ctk.StringVar()   # still used by _submit_loan
 
+        # Pre-fill client when editing an existing loan
         if loan:
             from app.core.services.client_service import ClientService
             client = ClientService.get_client_by_id(loan.client_id)
             if client:
                 self._apply_client_selection(client)
-                self.client_search_entry.configure(state="disabled")
+            self.client_search_entry.configure(state="disabled")
 
         # ══════════════════════════════════════════════════════════════════
         # LOAN DETAILS
@@ -854,7 +941,6 @@ class LoansScreen(ctk.CTkFrame):
             **input_style())
         self.purpose_entry.pack(fill="x", padx=20)
 
-        # Interest preview
         self.interest_preview = ctk.CTkLabel(
             self.detail_panel, text="",
             font=FONTS["body_small"],
@@ -870,7 +956,7 @@ class LoansScreen(ctk.CTkFrame):
             self._update_interest_preview()
 
         # ══════════════════════════════════════════════════════════════════
-        # STATEMENT ANALYSIS — with scenario cards
+        # STATEMENT ANALYSIS
         # ══════════════════════════════════════════════════════════════════
         self._section("Financial Statement Analysis")
 
@@ -887,18 +973,16 @@ class LoansScreen(ctk.CTkFrame):
             anchor="w", padx=20, pady=(0, 8))
 
         def _on_statement_accepted(principal: float, duration: int, ceiling):
-            """Called when a scenario card Accept button is clicked."""
             self._statement_analysed = True
             self.principal_entry.delete(0, "end")
             self.principal_entry.insert(0, str(int(principal)))
             self.duration_entry.delete(0, "end")
             self.duration_entry.insert(0, str(int(duration)))
             self._update_interest_preview()
-            # Show confirmation
             if hasattr(self, "stmt_status_label"):
                 self.stmt_status_label.configure(
-                    text=f"✓ Statement analysed — scenario accepted: "
-                         f"UGX {int(principal):,} / {duration} months",
+                    text=(f"✓ Statement analysed — scenario accepted: "
+                          f"UGX {int(principal):,} / {duration} months"),
                     text_color=COLORS["accent_green"])
 
         stmt_frame = ctk.CTkFrame(self.detail_panel, fg_color="transparent")
@@ -911,7 +995,6 @@ class LoansScreen(ctk.CTkFrame):
             current_user=self.current_user)
         self.statement_widget.grid(row=0, column=0, sticky="ew")
 
-        # Statement status label
         self.stmt_status_label = ctk.CTkLabel(
             self.detail_panel, text="",
             font=FONTS["caption"],
@@ -981,118 +1064,104 @@ class LoansScreen(ctk.CTkFrame):
             print(f"[LoansScreen] Client search error: {e}")
 
     def _show_client_popup(self, clients: list):
-        # Destroy any existing popup
         self._close_client_popup()
         if not clients:
             return
 
-        # Get position of the search entry
         entry = self.client_search_entry
         entry.update_idletasks()
-
-        # We need root-level coordinates
         try:
             x = entry.winfo_rootx()
             y = entry.winfo_rooty() + entry.winfo_height() + 2
-            w = max(entry.winfo_width(), 400)
+            w = max(entry.winfo_width(), 420)
         except Exception:
             return
 
-        rows_shown = min(len(clients), 6)
-        h          = rows_shown * 56 + 8
-
+        # Plain Toplevel with direct tk.Frame rows — no canvas.
+        # Canvas + scrollregion on Linux/GTK stays blank until a resize
+        # event fires, which is why the popup appeared white.
         popup = tk.Toplevel(self)
         popup.wm_overrideredirect(True)
-        popup.geometry(f"{w}x{h}+{x}+{y}")
         popup.attributes("-topmost", True)
-        popup.configure(bg=_WHITE)
+        popup.configure(bg=_BORDER)
         self._search_popup = popup
 
-        # Outer border frame
-        border = tk.Frame(popup, bg=_BORDER, padx=1, pady=1)
-        border.pack(fill="both", expand=True)
+        # 1-px green border frame
+        border = tk.Frame(popup, bg=_BORDER)
+        border.pack(fill="both", expand=True, padx=1, pady=1)
 
-        # Scrollable inner
-        canvas = tk.Canvas(border, bg=_WHITE, highlightthickness=0,
-                           height=h - 2)
-        canvas.pack(side="left", fill="both", expand=True)
-        sb = tk.Scrollbar(border, orient="vertical", command=canvas.yview)
-        if len(clients) > 6:
-            sb.pack(side="right", fill="y")
-        canvas.configure(yscrollcommand=sb.set)
+        shown = clients[:8]   # cap at 8 — keeps popup a manageable height
+        for i, client in enumerate(shown):
+            bg = _WHITE if i % 2 == 0 else "#F0F7F0"
 
-        inner = tk.Frame(canvas, bg=_WHITE)
-        canvas.create_window((0, 0), window=inner, anchor="nw")
-        inner.bind("<Configure>",
-                   lambda e: canvas.configure(
-                       scrollregion=canvas.bbox("all")))
-
-        for i, client in enumerate(clients[:10]):
-            bg  = _WHITE if i % 2 == 0 else "#F8FFF8"
-            row = tk.Frame(inner, bg=bg, cursor="hand2", height=54)
+            row = tk.Frame(border, bg=bg, cursor="hand2")
             row.pack(fill="x")
-            row.pack_propagate(False)
 
-            # Hover
-            def _enter(e, r=row):  r.configure(bg="#D5EDD5")
-            def _leave(e, r=row, b=bg): r.configure(bg=b)
-            row.bind("<Enter>", _enter)
-            row.bind("<Leave>", _leave)
+            # Left block: name + detail line stacked vertically
+            left = tk.Frame(row, bg=bg)
+            left.pack(side="left", fill="both", expand=True,
+                      padx=(10, 4), pady=6)
 
-            # Name
-            tk.Label(row, text=client.full_name, bg=bg, fg=_TEXT,
-                     font=("Helvetica", 10, "bold"), anchor="w").pack(
-                side="left", padx=(12, 4), pady=(8, 2), fill="x")
-
-            # Detail line
-            detail_row = tk.Frame(row, bg=bg)
-            detail_row.pack(side="left", fill="x", expand=True,
-                            padx=(0, 8))
+            tk.Label(left,
+                     text=client.full_name,
+                     bg=bg, fg=_TEXT,
+                     font=("Helvetica", 10, "bold"),
+                     anchor="w").pack(fill="x")
 
             details = []
             if client.nin:
                 details.append(f"NIN: {client.nin}")
             if client.phone_number:
-                details.append(f"📞 {client.phone_number}")
+                details.append(f"Tel: {client.phone_number}")
             if client.occupation:
                 details.append(client.occupation)
-
-            tk.Label(detail_row,
-                     text="  ·  ".join(details) if details else "—",
+            tk.Label(left,
+                     text="   ".join(details) if details else "—",
                      bg=bg, fg=_MUTED,
-                     font=("Helvetica", 8), anchor="w").pack(
-                side="left", pady=(0, 4))
+                     font=("Helvetica", 8),
+                     anchor="w").pack(fill="x")
 
-            # Select button
-            tk.Button(row, text="Select",
+            # Right: Select button
+            tk.Button(row,
+                      text="Select →",
                       bg=_GREEN, fg=_WHITE,
+                      activebackground=_GREEN_DARK,
+                      activeforeground=_WHITE,
                       relief="flat", bd=0,
                       font=("Helvetica", 9, "bold"),
-                      padx=10, pady=3, cursor="hand2",
-                      command=lambda c=client: self._select_client(c)).pack(
-                side="right", padx=8, pady=10)
+                      padx=10, pady=4,
+                      cursor="hand2",
+                      command=lambda c=client: self._select_client(c),
+                      ).pack(side="right", padx=8, pady=6)
 
-            # Divider
-            if i < len(clients) - 1:
-                tk.Frame(inner, bg=_BORDER, height=1).pack(
-                    fill="x", padx=8)
+            # 1-px divider between rows
+            if i < len(shown) - 1:
+                tk.Frame(border, bg=_BORDER, height=1).pack(fill="x")
 
-            # Bind click on whole row
-            for widget in [row, detail_row] + list(row.winfo_children()):
-                try:
-                    if not isinstance(widget, tk.Button):
-                        widget.bind("<Button-1>",
-                                    lambda e, c=client: self._select_client(c))
-                except Exception:
-                    pass
+            # Entire row is clickable (excluding the button which has its own cmd)
+            for widget in [row, left] + list(left.winfo_children()):
+                widget.bind("<Button-1>",
+                            lambda e, c=client: self._select_client(c))
+                widget.bind("<Enter>",
+                            lambda e, r=row: r.configure(bg="#C8EAC8"))
+                widget.bind("<Leave>",
+                            lambda e, r=row, b=bg: r.configure(bg=b))
+
+        # Let tk compute natural height from content, then size the window
+        popup.update_idletasks()
+        popup.geometry(f"{w}x{popup.winfo_reqheight()}+{x}+{y}")
 
     def _select_client(self, client):
-        """Called when a client is chosen from the popup."""
         self._close_client_popup()
         self._apply_client_selection(client)
 
     def _apply_client_selection(self, client):
-        """Apply the selected client to the form."""
+        """
+        Apply selected client to the form.
+        Updates the client card label and stores income on self.income_var
+        so _submit_loan / auto_score_loan can use it.
+        No separate income entry widget exists — income shown in card only.
+        """
         self.found_client_id   = client.id
         self._found_client_obj = client
 
@@ -1100,27 +1169,28 @@ class LoansScreen(ctk.CTkFrame):
         if hasattr(self, "client_search_var"):
             self.client_search_var.set(client.full_name)
 
-        # Update client card
-        nin   = client.nin           or "—"
-        phone = client.phone_number  or "—"
-        occ   = client.occupation    or "—"
-        inc   = (f"UGX {float(str(client.monthly_income).replace(',','')):.0f}"
-                 if client.monthly_income else "—")
+        # Build income string for the card
+        inc_str = "—"
+        if client.monthly_income:
+            try:
+                inc_val = float(
+                    str(client.monthly_income).replace(",", "").strip())
+                inc_str = f"UGX {int(inc_val):,}"
+                # Store raw value for scoring
+                if hasattr(self, "income_var"):
+                    self.income_var.set(str(int(inc_val)))
+            except (ValueError, TypeError):
+                pass
+
+        nin   = client.nin          or "—"
+        phone = client.phone_number or "—"
+        occ   = client.occupation   or "—"
 
         self.client_card_label.configure(
             text=(f"✔  {client.full_name}\n"
                   f"NIN: {nin}   Phone: {phone}\n"
-                  f"Occupation: {occ}   Stated Income: {inc}"),
+                  f"Occupation: {occ}   Stated Income: {inc_str}"),
             text_color=COLORS["accent_green"])
-
-        # Auto-fill monthly income from client record
-        if client.monthly_income and hasattr(self, "income_var"):
-            try:
-                inc_val = float(
-                    str(client.monthly_income).replace(",", "").strip())
-                self.income_var.set(str(int(inc_val)))
-            except (ValueError, TypeError):
-                pass
 
     def _close_client_popup(self):
         if self._search_popup:
@@ -1220,7 +1290,7 @@ class LoansScreen(ctk.CTkFrame):
         self._refresh_collateral_thumbs()
 
     # ══════════════════════════════════════════════════════════════════════════
-    # Submit — with statement reminder and auto risk scoring
+    # Submit
     # ══════════════════════════════════════════════════════════════════════════
 
     def _submit_loan(self):
@@ -1229,62 +1299,58 @@ class LoansScreen(ctk.CTkFrame):
         from app.core.models.collateral import Collateral
         from app.core.models.loan import Loan
 
-        # ── Validation ────────────────────────────────────────────────────
         if not self.found_client_id:
             self.loan_form_error.configure(
-                text="⚠  Please search for and select a client first.")
+                text="⚠  Please search for and select a client first.",
+                text_color=COLORS["danger"])
             return
 
         try:
             principal = _to_float(self.principal_entry.get())
         except ValueError as e:
-            self.loan_form_error.configure(text=f"⚠  Principal: {e}")
+            self.loan_form_error.configure(
+                text=f"⚠  Principal: {e}", text_color=COLORS["danger"])
             return
         if principal <= 0:
             self.loan_form_error.configure(
-                text="⚠  Principal must be greater than zero.")
+                text="⚠  Principal must be greater than zero.",
+                text_color=COLORS["danger"])
             return
 
         try:
             duration = _to_int(self.duration_entry.get())
         except ValueError:
             self.loan_form_error.configure(
-                text="⚠  Duration must be a whole number of months (e.g. 12).")
+                text="⚠  Duration must be a whole number of months (e.g. 12).",
+                text_color=COLORS["danger"])
             return
         if duration <= 0:
             self.loan_form_error.configure(
-                text="⚠  Duration must be at least 1 month.")
+                text="⚠  Duration must be at least 1 month.",
+                text_color=COLORS["danger"])
             return
 
-        # ── Statement reminder (non-blocking) ─────────────────────────────
-        # If no statement was analysed, remind the user but still allow submit.
-        # The stated income from the client record is used as the ceiling basis.
+        # Statement reminder — warn once, allow second click to proceed
         if not self._statement_analysed:
             income_raw = self.income_var.get().strip() if hasattr(
                 self, "income_var") else ""
-            if income_raw:
+            if income_raw and not getattr(self, "_stmt_warning_shown", False):
+                self._stmt_warning_shown = True
                 self.loan_form_error.configure(
                     text=(
-                        "ℹ  No statement analysed — using stated monthly income "
-                        f"(UGX {income_raw}) for the loan ceiling estimate. "
+                        "ℹ  No statement analysed — stated monthly income "
+                        f"(UGX {income_raw}) will be used for the ceiling. "
                         "Note: stated income may be overstated. "
                         "Click Submit again to proceed without a statement."
                     ),
                     text_color=COLORS.get("warning", "#D69E2E"))
-
-                # If this is the first time they hit submit without a statement,
-                # warn them but mark as acknowledged so second click proceeds.
-                if not getattr(self, "_stmt_warning_shown", False):
-                    self._stmt_warning_shown = True
-                    return   # let them read the warning first
-            # No income + no statement → continue anyway (loan officer's call)
+                return
 
         self._stmt_warning_shown = False
         self.loan_form_error.configure(
             text="Saving loan...", text_color=COLORS["text_muted"])
 
         try:
-            # ── Save loan ─────────────────────────────────────────────────
             if (self.selected_loan
                     and self.selected_loan.status.value == "pending"):
                 loan = LoanService.update_loan(
@@ -1307,14 +1373,13 @@ class LoansScreen(ctk.CTkFrame):
                     created_by_id    = (self.current_user.id
                                         if self.current_user else None),
                 )
-                # Set application date
                 with get_db() as db:
                     l = db.query(Loan).filter_by(id=loan.id).first()
                     if l:
                         l.application_date = self.application_date_picker.get_date()
                         db.commit()
 
-            # ── Save collateral ───────────────────────────────────────────
+            # Collateral
             os.makedirs(COLLATERAL_UPLOAD_DIR, exist_ok=True)
             with get_db() as db:
                 for fpath in self._collateral_files:
@@ -1334,7 +1399,7 @@ class LoansScreen(ctk.CTkFrame):
                     ))
                     db.commit()
 
-            # ── Save statement analysis ───────────────────────────────────
+            # Statement analysis (optional — never blocks submission)
             try:
                 if hasattr(self, "statement_widget"):
                     stmt_result    = self.statement_widget.get_statement_result()
@@ -1370,37 +1435,24 @@ class LoansScreen(ctk.CTkFrame):
                             ))
                             db.commit()
             except Exception:
-                pass   # statement save is optional — never block submission
-
-            # ── AUTO RISK SCORING ─────────────────────────────────────────
-            # Runs silently in background. Writes risk_score to the loan
-            # record so the manager sees it before approving.
-            # Human still approves or rejects — agent only informs.
-            loan_id_for_scoring = loan.id
-            stated_income = 0.0
-            try:
-                income_raw = self.income_var.get().strip()
-                if income_raw:
-                    stated_income = float(income_raw.replace(",", ""))
-            except (ValueError, AttributeError):
                 pass
+
+            # Auto risk scoring in background
+            loan_id_for_scoring = loan.id
 
             def _run_auto_risk():
                 try:
                     from app.core.agents.auto_risk import auto_score_loan
                     auto_score_loan(loan_id_for_scoring)
-                    print(f"[LoansScreen] Auto risk scoring complete "
-                          f"for loan #{loan_id_for_scoring}")
                 except Exception as e:
                     print(f"[LoansScreen] Auto risk error: {e}")
 
             threading.Thread(target=_run_auto_risk, daemon=True).start()
-            # ── END AUTO RISK ─────────────────────────────────────────────
 
-            # ── Reset form ────────────────────────────────────────────────
+            # Reset
             self.loan_form_error.configure(
-                text=f"✔  Loan {loan.loan_number} saved. "
-                     f"Risk assessment running in background...",
+                text=(f"✔  Loan {loan.loan_number} saved. "
+                      f"Risk assessment running in background..."),
                 text_color=COLORS["accent_green"])
             self._collateral_files   = []
             self._statement_analysed = False
@@ -1416,8 +1468,7 @@ class LoansScreen(ctk.CTkFrame):
 
         except Exception as e:
             self.loan_form_error.configure(
-                text=f"⚠  {e}",
-                text_color=COLORS["danger"])
+                text=f"⚠  {e}", text_color=COLORS["danger"])
 
     # ── Approve / reject ───────────────────────────────────────────────────────
 

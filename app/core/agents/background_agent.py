@@ -181,7 +181,7 @@ class BackgroundAgent:
                 payment_consistency = 1.0,   # new loan — no history yet
             )
 
-            risk_label    = score.risk_level
+            risk_label    = score.rating
             risk_reasoning = (
                 f"[AUTO-ASSESSED by Background Agent on {date.today()}]\n"
                 f"Risk Level: {risk_label}\n\n"
