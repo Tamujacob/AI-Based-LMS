@@ -20,7 +20,7 @@ The system was designed and case-studied at **Bingongold Credit**, a growing mic
 - **Loan Processing** — Application, approval workflow, and automated 10% interest calculation
 - **Repayment Tracking** — Real-time payment recording, outstanding balance, and overdue detection
 - **Financial Statement Analysis** — Upload MTN MoMo, Airtel Money, or bank PDF statements for AI-powered loan sizing with three scenario cards (Conservative / Standard / Extended)
-- **AI Risk Agent** — Powered by Groq API (llama-3.3-70b, free): risk scoring (LOW / MEDIUM / HIGH), portfolio alerts, and loan health summaries
+- **AI Risk Agent** — Powered by Groq API (llama-3.3-70b, free): Auto risk scoring (LOW / MEDIUM / HIGH), portfolio alerts, and loan health summaries
 - **AI Chatbot** — Ask questions in plain English with live database context. Upload statements directly in chat for instant loan recommendations
 - **Reports & Exports** — Generate PDF and Word documents for loan agreements and financial summaries
 - **Collateral Management** — Attach and manage document scans and photos per loan
