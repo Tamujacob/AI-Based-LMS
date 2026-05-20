@@ -15,11 +15,9 @@ Reminder triggers:
   •  0 days (due today)      → due today
   •  overdue                 → overdue notice
 
-Usage:
-    reminders = ReminderService.get_all_due_reminders()
-    for r in reminders:
-        print(r.message)
-        print(r.urgency)
+v2 fix:
+  - Added outstanding_balance field to ReminderItem so the
+    agent screen can display it correctly in the reminder rows.
 """
 
 from dataclasses import dataclass
@@ -29,15 +27,17 @@ from typing import List
 
 @dataclass
 class ReminderItem:
-    loan_number:  str
-    client_name:  str
-    phone:        str
-    amount_due:   float
-    due_date:     date
-    days_until:   int          # negative = overdue
-    urgency:      str          # "gentle" / "standard" / "urgent" / "overdue"
-    message:      str          # ready to send via WhatsApp/SMS
-    whatsapp_url: str          # opens WhatsApp with pre-filled message
+    loan_number:         str
+    client_name:         str
+    phone:               str
+    amount_due:          float
+    due_date:            date
+    days_until:          int          # negative = overdue
+    urgency:             str          # "gentle" / "standard" / "urgent" / "overdue"
+    message:             str          # ready to send via WhatsApp/SMS
+    whatsapp_url:        str          # opens WhatsApp with pre-filled message
+    outstanding_balance: float = 0.0  # actual outstanding balance on the loan
+    loan_id:             int   = 0    # loan DB id — used by overdue analysis
 
 
 class ReminderService:
@@ -65,10 +65,10 @@ class ReminderService:
                 if days_until > 14:
                     continue   # not due soon
 
-                client    = ClientService.get_client_by_id(loan.client_id)
-                balance   = RepaymentService.get_outstanding_balance(loan.id)
-                phone     = client.phone_number if client else ""
-                name      = client.full_name if client else "Borrower"
+                client  = ClientService.get_client_by_id(loan.client_id)
+                balance = RepaymentService.get_outstanding_balance(loan.id)
+                phone   = client.phone_number if client else ""
+                name    = client.full_name if client else "Borrower"
 
                 # Monthly instalment or outstanding balance
                 try:
@@ -77,12 +77,14 @@ class ReminderService:
                     monthly = float(balance)
 
                 item = ReminderService._build_reminder(
+                    loan_id     = loan.id,
                     loan_number = loan.loan_number,
                     client_name = name,
                     phone       = phone,
                     amount_due  = monthly,
                     due_date    = loan.due_date,
                     days_until  = days_until,
+                    outstanding_balance = float(balance),
                 )
                 reminders.append(item)
 
@@ -95,22 +97,24 @@ class ReminderService:
 
     @staticmethod
     def _build_reminder(
-        loan_number: str,
-        client_name: str,
-        phone: str,
-        amount_due: float,
-        due_date: date,
-        days_until: int,
+        loan_id:             int,
+        loan_number:         str,
+        client_name:         str,
+        phone:               str,
+        amount_due:          float,
+        due_date:            date,
+        days_until:          int,
+        outstanding_balance: float = 0.0,
     ) -> ReminderItem:
 
         if days_until < 0:
             urgency = "overdue"
-            days_text = f"{abs(days_until)} days overdue"
             message = (
                 f"Dear {client_name},\n\n"
                 f"This is a reminder from Bingongold Credit.\n\n"
                 f"Your loan payment of UGX {amount_due:,.0f} for loan {loan_number} "
                 f"was due on {due_date} and is now {abs(days_until)} days overdue.\n\n"
+                f"Outstanding balance: UGX {outstanding_balance:,.0f}\n\n"
                 f"Please make payment immediately to avoid penalties.\n\n"
                 f"Pay via:\n"
                 f"• MTN Mobile Money: [Number]\n"
@@ -121,7 +125,6 @@ class ReminderService:
             )
         elif days_until == 0:
             urgency = "urgent"
-            days_text = "due TODAY"
             message = (
                 f"Dear {client_name},\n\n"
                 f"Reminder from Bingongold Credit: Your loan payment of "
@@ -131,7 +134,6 @@ class ReminderService:
             )
         elif days_until <= 3:
             urgency = "urgent"
-            days_text = f"due in {days_until} days"
             message = (
                 f"Dear {client_name},\n\n"
                 f"URGENT: Your loan payment of UGX {amount_due:,.0f} "
@@ -141,7 +143,6 @@ class ReminderService:
             )
         elif days_until <= 7:
             urgency = "standard"
-            days_text = f"due in {days_until} days"
             message = (
                 f"Dear {client_name},\n\n"
                 f"This is a friendly reminder from Bingongold Credit.\n\n"
@@ -152,7 +153,6 @@ class ReminderService:
             )
         else:
             urgency = "gentle"
-            days_text = f"due in {days_until} days"
             message = (
                 f"Dear {client_name},\n\n"
                 f"Advance notice from Bingongold Credit: Your loan payment of "
@@ -160,24 +160,29 @@ class ReminderService:
                 f"Bingongold Credit — together as one"
             )
 
-        # Build WhatsApp URL (opens app with pre-filled message)
+        # WhatsApp URL
         import urllib.parse
         clean_phone = phone.replace(" ", "").replace("+", "").replace("-", "")
         if clean_phone.startswith("0"):
             clean_phone = "256" + clean_phone[1:]
-        encoded_msg = urllib.parse.quote(message)
-        whatsapp_url = f"https://wa.me/{clean_phone}?text={encoded_msg}" if clean_phone else ""
+        encoded_msg  = urllib.parse.quote(message)
+        whatsapp_url = (
+            f"https://wa.me/{clean_phone}?text={encoded_msg}"
+            if clean_phone else ""
+        )
 
         return ReminderItem(
-            loan_number  = loan_number,
-            client_name  = client_name,
-            phone        = phone,
-            amount_due   = amount_due,
-            due_date     = due_date,
-            days_until   = days_until,
-            urgency      = urgency,
-            message      = message,
-            whatsapp_url = whatsapp_url,
+            loan_id              = loan_id,
+            loan_number          = loan_number,
+            client_name          = client_name,
+            phone                = phone,
+            amount_due           = amount_due,
+            due_date             = due_date,
+            days_until           = days_until,
+            urgency              = urgency,
+            message              = message,
+            whatsapp_url         = whatsapp_url,
+            outstanding_balance  = outstanding_balance,
         )
 
     @staticmethod
