@@ -12,6 +12,11 @@ Changes from original:
      outstanding balance, phone number, and WhatsApp message
   4. New card: Portfolio Health Summary — quick stats
   5. New card: Loan Maturity Forecast — loans expiring soon
+
+v2 layout changes:
+  - Right column is ONE CTkScrollableFrame — single scrollbar
+  - Output box is tall (fixed height) so it dominates the view
+  - Reminder rows are compact single-line strips
 """
 
 import threading
@@ -25,7 +30,7 @@ class AgentScreen(ctk.CTkFrame):
         super().__init__(master, fg_color=COLORS["bg_primary"], **kwargs)
         self.master       = master
         self.current_user = master.current_user
-        self._search_popup = None   # active client search popup window
+        self._search_popup = None
         self._build()
         self._load_model_status()
         self._load_reminders()
@@ -100,10 +105,7 @@ class AgentScreen(ctk.CTkFrame):
                   padx=(24, 8), pady=(0, 24))
         left.columnconfigure(0, weight=1)
 
-        # ── 1. Assess Single Loan ─────────────────────────────────────────
         self._build_assess_card(left, row=0)
-
-        # ── 2. Scan Portfolio ─────────────────────────────────────────────
         self._simple_card(
             left, row=1,
             title="Scan Full Portfolio",
@@ -111,8 +113,6 @@ class AgentScreen(ctk.CTkFrame):
             btn_text="Scan Portfolio",
             btn_cmd=self._scan_portfolio,
         )
-
-        # ── 3. Overdue Alerts ─────────────────────────────────────────────
         self._simple_card(
             left, row=2,
             title="Overdue Alerts & Collections",
@@ -120,11 +120,7 @@ class AgentScreen(ctk.CTkFrame):
             btn_text="Check Overdue",
             btn_cmd=self._check_overdue,
         )
-
-        # ── 4. Credit Score ───────────────────────────────────────────────
         self._build_credit_score_card(left, row=3)
-
-        # ── 5. Portfolio Health Summary (NEW) ─────────────────────────────
         self._simple_card(
             left, row=4,
             title="Portfolio Health Summary",
@@ -135,8 +131,6 @@ class AgentScreen(ctk.CTkFrame):
             btn_text="Get Health Summary",
             btn_cmd=self._portfolio_health,
         )
-
-        # ── 6. Loan Maturity Forecast (NEW) ───────────────────────────────
         self._simple_card(
             left, row=5,
             title="Loan Maturity Forecast",
@@ -148,7 +142,7 @@ class AgentScreen(ctk.CTkFrame):
             btn_cmd=self._maturity_forecast,
         )
 
-    # ── Assess loan card (with client search popup) ────────────────────────────
+    # ── Assess loan card ───────────────────────────────────────────────────────
 
     def _build_assess_card(self, parent, row):
         card = ctk.CTkFrame(
@@ -177,7 +171,6 @@ class AgentScreen(ctk.CTkFrame):
             anchor="w", wraplength=300, justify="left",
         ).pack(fill="x", padx=16, pady=(0, 8))
 
-        # Loan number entry
         ctk.CTkLabel(
             card, text="Loan Number",
             font=FONTS["body_small"],
@@ -191,7 +184,6 @@ class AgentScreen(ctk.CTkFrame):
         )
         self.loan_number_entry.pack(fill="x", padx=16, pady=(0, 8))
 
-        # Client name / NIN search with popup
         ctk.CTkLabel(
             card, text="Search by Client Name or NIN",
             font=FONTS["body_small"],
@@ -226,7 +218,6 @@ class AgentScreen(ctk.CTkFrame):
             command=self._trigger_client_search,
         ).grid(row=0, column=1)
 
-        # Selected client indicator
         self.selected_client_label = ctk.CTkLabel(
             card, text="",
             font=FONTS["caption"],
@@ -247,7 +238,7 @@ class AgentScreen(ctk.CTkFrame):
             command=self._assess_loan,
         ).pack(fill="x", padx=16, pady=(4, 16))
 
-    # ── Credit score card with popup ───────────────────────────────────────────
+    # ── Credit score card ──────────────────────────────────────────────────────
 
     def _build_credit_score_card(self, parent, row):
         card = ctk.CTkFrame(
@@ -306,7 +297,7 @@ class AgentScreen(ctk.CTkFrame):
             command=self._get_credit_score,
         ).pack(fill="x", padx=16, pady=(8, 16))
 
-    # ── Simple card (no entry) ─────────────────────────────────────────────────
+    # ── Simple card ────────────────────────────────────────────────────────────
 
     def _simple_card(self, parent, row, title, desc, btn_text, btn_cmd):
         card = ctk.CTkFrame(
@@ -336,18 +327,26 @@ class AgentScreen(ctk.CTkFrame):
             command=btn_cmd,
         ).pack(fill="x", padx=16, pady=(0, 16))
 
-    # ── Right panel ────────────────────────────────────────────────────────────
+    # ── Right panel — single scrollable column ─────────────────────────────────
 
     def _build_right(self, parent):
-        right = ctk.CTkFrame(parent, fg_color="transparent")
-        right.grid(row=1, column=1, sticky="nsew",
-                   padx=(8, 24), pady=(0, 24))
-        right.columnconfigure(0, weight=1)
-        right.rowconfigure(1, weight=3)   # output box gets most space
-        right.rowconfigure(3, weight=2)   # reminders get remaining space
+        """
+        Single CTkScrollableFrame for the entire right column.
+        Contains: output header + output box (tall) + reminders header + reminder rows.
+        One scrollbar, no nested scroll areas.
+        """
+        self._right_scroll = ctk.CTkScrollableFrame(
+            parent,
+            fg_color="transparent",
+            scrollbar_button_color=COLORS["accent_green"],
+            scrollbar_button_hover_color=COLORS["accent_green_dark"],
+        )
+        self._right_scroll.grid(row=1, column=1, sticky="nsew",
+                                padx=(8, 24), pady=(0, 24))
+        self._right_scroll.columnconfigure(0, weight=1)
 
-        # ── Output label + copy button ─────────────────────────────────────
-        out_hdr = ctk.CTkFrame(right, fg_color="transparent")
+        # ── Output header ──────────────────────────────────────────────────
+        out_hdr = ctk.CTkFrame(self._right_scroll, fg_color="transparent")
         out_hdr.grid(row=0, column=0, sticky="ew", pady=(0, 6))
         out_hdr.columnconfigure(0, weight=1)
 
@@ -378,16 +377,18 @@ class AgentScreen(ctk.CTkFrame):
             command=self._clear_output,
         ).grid(row=0, column=2, sticky="e", padx=(6, 0))
 
-        # ── Output box — full height ───────────────────────────────────────
+        # ── Output box — fixed tall height ─────────────────────────────────
+        # height=340 gives ~17 lines of output visible without scrolling
         self.output_box = ctk.CTkTextbox(
-            right,
+            self._right_scroll,
             fg_color=COLORS["bg_card"],
             text_color=COLORS["text_primary"],
             font=("Courier", 11), wrap="word",
             corner_radius=10, border_width=1,
             border_color=COLORS["border"],
+            height=340,
         )
-        self.output_box.grid(row=1, column=0, sticky="nsew")
+        self.output_box.grid(row=1, column=0, sticky="ew", pady=(0, 20))
         self.output_box.insert(
             "end",
             "Click any action on the left to run an AI analysis.\n\n"
@@ -399,9 +400,9 @@ class AgentScreen(ctk.CTkFrame):
         )
         self.output_box.configure(state="disabled")
 
-        # ── Reminders section ──────────────────────────────────────────────
-        rem_hdr = ctk.CTkFrame(right, fg_color="transparent")
-        rem_hdr.grid(row=2, column=0, sticky="ew", pady=(16, 6))
+        # ── Reminders header ───────────────────────────────────────────────
+        rem_hdr = ctk.CTkFrame(self._right_scroll, fg_color="transparent")
+        rem_hdr.grid(row=2, column=0, sticky="ew", pady=(0, 6))
         rem_hdr.columnconfigure(0, weight=1)
 
         ctk.CTkLabel(
@@ -421,15 +422,28 @@ class AgentScreen(ctk.CTkFrame):
             command=self._load_reminders,
         ).grid(row=0, column=1, sticky="e")
 
-        self.reminders_frame = ctk.CTkScrollableFrame(
-            right,
+        # ── Reminders container — CTk horizontal scroll ────────────────────
+        # CTkScrollableFrame with orientation="horizontal" gives a styled
+        # CTk scrollbar and renders all CTk child widgets correctly.
+        # Vertical scrolling is handled by the outer _right_scroll.
+        rem_border = ctk.CTkFrame(
+            self._right_scroll,
             fg_color=COLORS["bg_card"],
             corner_radius=10, border_width=1,
             border_color=COLORS["border"],
-            scrollbar_button_color=COLORS["border"],
         )
-        self.reminders_frame.grid(row=3, column=0, sticky="nsew")
-        self.reminders_frame.columnconfigure(0, weight=1)
+        rem_border.grid(row=3, column=0, sticky="ew")
+        rem_border.columnconfigure(0, weight=1)
+
+        self.reminders_frame = ctk.CTkScrollableFrame(
+            rem_border,
+            fg_color=COLORS["bg_card"],
+            corner_radius=0,
+            orientation="horizontal",
+            scrollbar_button_color=COLORS["accent_green"],
+            scrollbar_button_hover_color=COLORS["accent_green_dark"],
+        )
+        self.reminders_frame.pack(fill="both", expand=True)
 
     # ══════════════════════════════════════════════════════════════════════════
     # Client search popup
@@ -487,7 +501,6 @@ class AgentScreen(ctk.CTkFrame):
 
     def _show_client_popup(self, clients, anchor_widget, on_select,
                            popup_attr="_search_popup"):
-        # Close any existing popup of this type
         existing = getattr(self, popup_attr, None)
         if existing:
             try:
@@ -499,121 +512,81 @@ class AgentScreen(ctk.CTkFrame):
         if not clients:
             return
 
-        # Get anchor position
         anchor_widget.update_idletasks()
         x = anchor_widget.winfo_rootx()
         y = anchor_widget.winfo_rooty() + anchor_widget.winfo_height() + 2
         w = anchor_widget.winfo_width() + 80
 
-        popup = ctk.CTkToplevel(self)
+        import tkinter as tk
+        popup = tk.Toplevel(self)
         popup.wm_overrideredirect(True)
-        popup.geometry(f"{w}x{min(len(clients), 6) * 52 + 8}+{x}+{y}")
         popup.attributes("-topmost", True)
-        popup.configure(fg_color=COLORS["bg_card"])
+        popup.configure(bg=COLORS["border"])
         setattr(self, popup_attr, popup)
 
-        scroll = ctk.CTkScrollableFrame(
-            popup,
-            fg_color=COLORS["bg_card"],
-            corner_radius=8,
-            border_width=1,
-            border_color=COLORS["border"],
-            scrollbar_button_color=COLORS["border"],
-        )
-        scroll.pack(fill="both", expand=True, padx=2, pady=2)
-        scroll.columnconfigure(0, weight=1)
+        border = tk.Frame(popup, bg=COLORS["border"])
+        border.pack(fill="both", expand=True, padx=1, pady=1)
 
-        for i, client in enumerate(clients[:10]):
-            row = ctk.CTkFrame(
-                scroll,
-                fg_color="transparent",
-                corner_radius=6,
-            )
-            row.pack(fill="x", padx=4, pady=2)
+        shown = clients[:8]
+        for i, client in enumerate(shown):
+            bg = COLORS["bg_card"] if i % 2 == 0 else COLORS["bg_input"]
 
-            # Hover effect
-            def _enter(e, r=row):
-                r.configure(fg_color=COLORS["bg_input"])
-            def _leave(e, r=row):
-                r.configure(fg_color="transparent")
-            row.bind("<Enter>", _enter)
-            row.bind("<Leave>", _leave)
+            row = tk.Frame(border, bg=bg, cursor="hand2")
+            row.pack(fill="x")
 
-            # Name + NIN line
-            name_line = ctk.CTkFrame(row, fg_color="transparent")
-            name_line.pack(fill="x", padx=8, pady=(6, 0))
+            left = tk.Frame(row, bg=bg)
+            left.pack(side="left", fill="both", expand=True, padx=(10, 4), pady=6)
 
-            ctk.CTkLabel(
-                name_line,
-                text=client.full_name,
-                font=FONTS["body_small"],
-                text_color=COLORS["text_primary"],
-                anchor="w",
-            ).pack(side="left")
+            tk.Label(left, text=client.full_name,
+                     bg=bg, fg=COLORS["text_primary"],
+                     font=("Helvetica", 10, "bold"), anchor="w").pack(fill="x")
 
+            details = []
             if client.nin:
-                ctk.CTkLabel(
-                    name_line,
-                    text=f"  NIN: {client.nin}",
-                    font=FONTS["caption"],
-                    text_color=COLORS["text_muted"],
-                    anchor="w",
-                ).pack(side="left")
-
-            # Phone line
-            detail_line = ctk.CTkFrame(row, fg_color="transparent")
-            detail_line.pack(fill="x", padx=8, pady=(0, 6))
-
+                details.append(f"NIN: {client.nin}")
             if client.phone_number:
-                ctk.CTkLabel(
-                    detail_line,
-                    text=f"📞 {client.phone_number}",
-                    font=FONTS["caption"],
-                    text_color=COLORS["text_muted"],
-                    anchor="w",
-                ).pack(side="left")
-
+                details.append(f"Tel: {client.phone_number}")
             if client.occupation:
-                ctk.CTkLabel(
-                    detail_line,
-                    text=f"  •  {client.occupation}",
-                    font=FONTS["caption"],
-                    text_color=COLORS["text_muted"],
-                    anchor="w",
-                ).pack(side="left")
+                details.append(client.occupation)
+            tk.Label(left,
+                     text="   ".join(details) if details else "—",
+                     bg=bg, fg=COLORS["text_muted"],
+                     font=("Helvetica", 8), anchor="w").pack(fill="x")
 
-            # Bind click to entire row and all children
-            def _select(e, c=client, pa=popup_attr):
-                on_select(c)
-                try:
-                    getattr(self, pa).destroy()
-                except Exception:
-                    pass
-                setattr(self, pa, None)
+            tk.Button(row, text="Select →",
+                      bg=COLORS["accent_green"], fg="#FFFFFF",
+                      relief="flat", bd=0,
+                      font=("Helvetica", 9, "bold"),
+                      padx=10, pady=4, cursor="hand2",
+                      command=lambda c=client, pa=popup_attr: (
+                          on_select(c),
+                          setattr(self, pa, None),
+                          popup.destroy(),
+                      )).pack(side="right", padx=8, pady=6)
 
-            for widget in [row, name_line, detail_line] + \
-                          row.winfo_children() + \
-                          name_line.winfo_children() + \
-                          detail_line.winfo_children():
-                try:
-                    widget.bind("<Button-1>", _select)
-                except Exception:
-                    pass
+            if i < len(shown) - 1:
+                tk.Frame(border, bg=COLORS["border"], height=1).pack(fill="x")
 
-            # Divider between rows
-            if i < len(clients) - 1:
-                ctk.CTkFrame(
-                    scroll, fg_color=COLORS["border"], height=1,
-                ).pack(fill="x", padx=8)
+            for widget in [row, left] + list(left.winfo_children()):
+                widget.bind("<Button-1>",
+                            lambda e, c=client, pa=popup_attr: (
+                                on_select(c),
+                                setattr(self, pa, None),
+                                popup.destroy(),
+                            ))
+                widget.bind("<Enter>",
+                            lambda e, r=row: r.configure(bg="#C8EAC8"))
+                widget.bind("<Leave>",
+                            lambda e, r=row, b=bg: r.configure(bg=b))
+
+        popup.update_idletasks()
+        popup.geometry(f"{w}x{popup.winfo_reqheight()}+{x}+{y}")
 
     def _on_client_popup_select(self, client):
-        """Called when a client is selected in the assess-loan popup."""
         self.client_search_var.set(client.full_name)
         self.selected_client_label.configure(
             text=f"✓  {client.full_name}  |  NIN: {client.nin or '—'}  |  {client.phone_number or '—'}"
         )
-
-        # Auto-find their most recent active loan
         threading.Thread(
             target=self._auto_fill_loan_number,
             args=(client.id,),
@@ -623,7 +596,7 @@ class AgentScreen(ctk.CTkFrame):
     def _auto_fill_loan_number(self, client_id: int):
         try:
             from app.core.services.loan_service import LoanService
-            loans = LoanService.get_loans_by_client(client_id)
+            loans  = LoanService.get_loans_by_client(client_id)
             active = [l for l in loans if l.status.value == "active"]
             target = active[0] if active else (loans[0] if loans else None)
             if target:
@@ -740,7 +713,6 @@ class AgentScreen(ctk.CTkFrame):
     # ── Credit score ───────────────────────────────────────────────────────────
 
     def _get_credit_score(self):
-        # Use selected client id if available, otherwise search by text
         client_id = getattr(self, "_credit_selected_client_id", None)
         term      = self.credit_client_var.get().strip()
 
@@ -759,7 +731,7 @@ class AgentScreen(ctk.CTkFrame):
                 if not client:
                     self._set_output("Selected client no longer found.")
                     return
-                cid = client_id
+                cid   = client_id
                 cname = client.full_name
             else:
                 clients = ClientService.get_all_clients(search=term)
@@ -783,7 +755,7 @@ class AgentScreen(ctk.CTkFrame):
 
         threading.Thread(target=run, daemon=True).start()
 
-    # ── Portfolio health summary (NEW) ─────────────────────────────────────────
+    # ── Portfolio health ───────────────────────────────────────────────────────
 
     def _portfolio_health(self):
         self._set_output("Building portfolio health summary...")
@@ -791,7 +763,6 @@ class AgentScreen(ctk.CTkFrame):
         def run():
             try:
                 from app.core.services.loan_service import LoanService
-                from app.core.services.repayment_service import RepaymentService
                 from datetime import date
 
                 counts    = LoanService.count_by_status()
@@ -799,10 +770,10 @@ class AgentScreen(ctk.CTkFrame):
                 overdue   = LoanService.get_overdue_loans()
                 interest  = LoanService.total_interest_earned()
 
-                total_loans = sum(counts.values())
-                active      = counts.get("active", 0)
-                completed   = counts.get("completed", 0)
-                defaulted   = counts.get("defaulted", 0)
+                total_loans  = sum(counts.values())
+                active       = counts.get("active", 0)
+                completed    = counts.get("completed", 0)
+                defaulted    = counts.get("defaulted", 0)
                 default_rate = (defaulted / total_loans * 100) if total_loans else 0
 
                 lines = [
@@ -821,7 +792,6 @@ class AgentScreen(ctk.CTkFrame):
                     "",
                     "─" * 44,
                 ]
-
                 if overdue:
                     lines.append(f"TOP OVERDUE LOANS ({len(overdue)} total):")
                     for loan in sorted(
@@ -844,7 +814,7 @@ class AgentScreen(ctk.CTkFrame):
 
         threading.Thread(target=run, daemon=True).start()
 
-    # ── Loan maturity forecast (NEW) ───────────────────────────────────────────
+    # ── Maturity forecast ──────────────────────────────────────────────────────
 
     def _maturity_forecast(self):
         self._set_output("Loading loan maturity forecast...")
@@ -853,12 +823,12 @@ class AgentScreen(ctk.CTkFrame):
             try:
                 from app.core.services.loan_service import LoanService
                 from app.core.services.client_service import ClientService
-                from datetime import date, timedelta
+                from datetime import date
 
                 all_loans = LoanService.get_all_loans(status="active")
                 today     = date.today()
+                buckets   = {"30 days": [], "60 days": [], "90 days": []}
 
-                buckets = {"30 days": [], "60 days": [], "90 days": []}
                 for loan in all_loans:
                     if not loan.due_date:
                         continue
@@ -872,10 +842,7 @@ class AgentScreen(ctk.CTkFrame):
                     elif days_left <= 90:
                         buckets["90 days"].append((days_left, loan))
 
-                lines = [
-                    f"LOAN MATURITY FORECAST — {today}",
-                    "=" * 44,
-                ]
+                lines = [f"LOAN MATURITY FORECAST — {today}", "=" * 44]
                 for bucket, loans in buckets.items():
                     lines.append(f"\nDue within {bucket} ({len(loans)} loans):")
                     if not loans:
@@ -883,7 +850,7 @@ class AgentScreen(ctk.CTkFrame):
                         continue
                     for days_left, loan in sorted(loans, key=lambda x: x[0]):
                         client = ClientService.get_client_by_id(loan.client_id)
-                        name   = client.full_name if client else "—"
+                        name   = client.full_name    if client else "—"
                         phone  = client.phone_number if client else "—"
                         lines.append(
                             f"  {loan.loan_number}  {name[:18]:<18}  "
@@ -934,7 +901,6 @@ class AgentScreen(ctk.CTkFrame):
         def run():
             try:
                 from app.core.agents.reminder_service import ReminderService
-                from app.core.services.repayment_service import RepaymentService
                 reminders = ReminderService.get_all_due_reminders()
                 self.after(0, lambda: self._render_reminders(reminders))
             except Exception:
@@ -951,7 +917,7 @@ class AgentScreen(ctk.CTkFrame):
                 text="No upcoming or overdue payments.",
                 font=FONTS["body_small"],
                 text_color=COLORS["text_muted"],
-            ).pack(pady=16)
+            ).pack(pady=12, padx=16)
             return
 
         urgency_colors = {
@@ -961,109 +927,144 @@ class AgentScreen(ctk.CTkFrame):
             "gentle":   COLORS.get("text_muted",   "#718096"),
         }
 
-        for r in reminders[:20]:
-            color = urgency_colors.get(r.urgency, COLORS["text_secondary"])
+        # One wide inner frame — the horizontal scrollable frame scrolls this
+        # left/right. All rows fill="x" inside this fixed-width container.
+        # Total width = sum of all column widths + buttons
+        TOTAL_W = 10 + 110 + 140 + 90 + 90 + 120 + 110 + 64 + 58 + 30
+        inner = ctk.CTkFrame(
+            self.reminders_frame,
+            fg_color=COLORS["bg_card"],
+            corner_radius=0,
+            width=TOTAL_W,
+        )
+        inner.pack(side="left", fill="y")
+        inner.pack_propagate(False)
+        inner.configure(width=TOTAL_W)
 
-            # ── Reminder card ────────────────────────────────────────────
-            card = ctk.CTkFrame(
-                self.reminders_frame,
-                fg_color=COLORS["bg_input"],
-                corner_radius=8,
-            )
-            card.pack(fill="x", padx=8, pady=4)
-            card.columnconfigure(1, weight=1)
+        # ── Column header ──────────────────────────────────────────────────
+        hdr = ctk.CTkFrame(
+            inner,
+            fg_color=COLORS["accent_green"],
+            corner_radius=0, height=28,
+        )
+        hdr.pack(fill="x")
+        hdr.pack_propagate(False)
 
-            # Left accent bar (color-coded by urgency)
-            accent = ctk.CTkFrame(
-                card, fg_color=color, width=4, corner_radius=0)
-            accent.grid(row=0, column=0, rowspan=3, sticky="ns",
-                        padx=(0, 10), pady=0)
-
-            # Loan number + days overdue badge
-            top_row = ctk.CTkFrame(card, fg_color="transparent")
-            top_row.grid(row=0, column=1, sticky="ew",
-                         padx=(0, 10), pady=(8, 2))
-            top_row.columnconfigure(0, weight=1)
-
+        for col_text, width in [
+            ("Loan No.",  110),
+            ("Client",    140),
+            ("Due Date",   90),
+            ("Status",     90),
+            ("Balance",   120),
+            ("Phone",     110),
+            ("Actions",   122),
+        ]:
             ctk.CTkLabel(
-                top_row,
-                text=r.loan_number,
-                font=FONTS.get("badge", FONTS["subheading"]),
-                text_color=color,
-                anchor="w",
-            ).grid(row=0, column=0, sticky="w")
+                hdr, text=col_text,
+                font=FONTS["badge"],
+                text_color="#FFFFFF",
+                width=width, anchor="w",
+            ).pack(side="left",
+                   padx=(10 if col_text == "Loan No." else 4, 0))
 
+        # ── One compact row per reminder ───────────────────────────────────
+        for i, r in enumerate(reminders[:30]):
+            color = urgency_colors.get(r.urgency, COLORS["text_secondary"])
+            bg    = COLORS["bg_card"] if i % 2 == 0 else COLORS["bg_input"]
+
+            row = ctk.CTkFrame(
+                inner,
+                fg_color=bg,
+                corner_radius=0,
+                height=36,
+            )
+            row.pack(fill="x")
+            row.pack_propagate(False)
+
+            # Left accent bar
+            ctk.CTkFrame(
+                row, fg_color=color, width=4, corner_radius=0,
+            ).pack(side="left", fill="y")
+
+            # Loan number
+            ctk.CTkLabel(
+                row, text=r.loan_number,
+                font=FONTS["caption"], text_color=color,
+                width=110, anchor="w",
+            ).pack(side="left", padx=(6, 0))
+
+            # Client name
+            name = (r.client_name[:17] + "…") \
+                if len(r.client_name) > 18 else r.client_name
+            ctk.CTkLabel(
+                row, text=name,
+                font=FONTS["caption"], text_color=COLORS["text_primary"],
+                width=140, anchor="w",
+            ).pack(side="left", padx=(4, 0))
+
+            # Due date
+            due_str = str(r.due_date) \
+                if hasattr(r, "due_date") and r.due_date else "—"
+            ctk.CTkLabel(
+                row, text=due_str,
+                font=FONTS["caption"], text_color=COLORS["text_muted"],
+                width=90, anchor="w",
+            ).pack(side="left", padx=(4, 0))
+
+            # Days overdue / until
             days_text = (
                 f"{abs(r.days_until)}d overdue"
                 if r.days_until < 0
-                else f"due in {r.days_until}d"
+                else f"in {r.days_until}d"
             )
             ctk.CTkLabel(
-                top_row,
-                text=days_text,
-                font=FONTS["caption"],
-                text_color=color,
-                fg_color=COLORS["bg_card"],
-                corner_radius=6,
-                padx=8, pady=2,
-            ).grid(row=0, column=1, sticky="e")
+                row, text=days_text,
+                font=FONTS["caption"], text_color=color,
+                width=90, anchor="w",
+            ).pack(side="left", padx=(4, 0))
 
-            # Client name
+            # Balance
+            bal_str = (
+                f"UGX {float(r.outstanding_balance):,.0f}"
+                if hasattr(r, "outstanding_balance") and r.outstanding_balance
+                else "—"
+            )
             ctk.CTkLabel(
-                card,
-                text=r.client_name,
-                font=FONTS["body_small"],
-                text_color=COLORS["text_primary"],
-                anchor="w",
-            ).grid(row=1, column=1, sticky="w", padx=(0, 10))
+                row, text=bal_str,
+                font=FONTS["caption"], text_color=COLORS["text_muted"],
+                width=120, anchor="w",
+            ).pack(side="left", padx=(4, 0))
 
-            # Detail row: due date + phone + amount
-            detail_parts = []
-            if hasattr(r, "due_date") and r.due_date:
-                detail_parts.append(f"Due: {r.due_date}")
-            if hasattr(r, "phone") and r.phone:
-                detail_parts.append(f"📞 {r.phone}")
-            if hasattr(r, "outstanding_balance") and r.outstanding_balance:
-                detail_parts.append(
-                    f"Balance: UGX {float(r.outstanding_balance):,.0f}")
+            # Phone
+            phone_str = r.phone if hasattr(r, "phone") and r.phone else "—"
+            ctk.CTkLabel(
+                row, text=phone_str,
+                font=FONTS["caption"], text_color=COLORS["text_muted"],
+                width=110, anchor="w",
+            ).pack(side="left", padx=(4, 0))
 
-            if detail_parts:
-                ctk.CTkLabel(
-                    card,
-                    text="  ·  ".join(detail_parts),
-                    font=FONTS["caption"],
-                    text_color=COLORS["text_muted"],
-                    anchor="w",
-                    wraplength=420,
-                ).grid(row=2, column=1, sticky="w",
-                       padx=(0, 10), pady=(0, 4))
-
-            # Action buttons row
-            btn_row = ctk.CTkFrame(card, fg_color="transparent")
-            btn_row.grid(row=3, column=1, sticky="ew",
-                         padx=(0, 10), pady=(2, 8))
-
+            # Buttons
             ctk.CTkButton(
-                btn_row, text="Copy WhatsApp Message",
-                height=26,
+                row, text="📋 Copy",
+                width=64, height=26,
                 fg_color=COLORS["bg_card"],
-                hover_color=COLORS["border"],
-                text_color=COLORS["accent_green_dark"],
-                font=FONTS["caption"], corner_radius=6,
+                hover_color=COLORS["accent_green"],
+                text_color=COLORS["text_secondary"],
+                font=FONTS["caption"], corner_radius=4,
                 border_width=1, border_color=COLORS["border"],
                 command=lambda msg=r.message: self._copy_reminder(msg),
-            ).pack(side="left", padx=(0, 6))
+            ).pack(side="left", padx=(4, 0), pady=5)
 
             ctk.CTkButton(
-                btn_row, text="Assess Loan",
-                height=26,
+                row, text="Assess",
+                width=58, height=26,
                 fg_color=COLORS["bg_card"],
-                hover_color=COLORS["border"],
+                hover_color=COLORS["accent_green"],
                 text_color=COLORS["text_secondary"],
-                font=FONTS["caption"], corner_radius=6,
+                font=FONTS["caption"], corner_radius=4,
                 border_width=1, border_color=COLORS["border"],
                 command=lambda ln=r.loan_number: self._quick_assess(ln),
-            ).pack(side="left")
+            ).pack(side="left", padx=(4, 6), pady=5)
 
     def _copy_reminder(self, message: str):
         self.clipboard_clear()
@@ -1075,7 +1076,6 @@ class AgentScreen(ctk.CTkFrame):
         )
 
     def _quick_assess(self, loan_number: str):
-        """Quickly load a loan number from reminder into the assess entry."""
         self.loan_number_entry.delete(0, "end")
         self.loan_number_entry.insert(0, loan_number)
         self._assess_loan()
