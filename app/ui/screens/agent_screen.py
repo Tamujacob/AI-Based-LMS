@@ -1076,6 +1076,188 @@ class AgentScreen(ctk.CTkFrame):
         )
 
     def _quick_assess(self, loan_number: str):
+        """
+        Full overdue analysis for a loan from the reminders panel.
+        Shows repayment history, money disbursed vs collected,
+        outstanding balance, interest at risk, recovery recommendations,
+        and a risk re-rating based on actual payment behaviour.
+        """
         self.loan_number_entry.delete(0, "end")
         self.loan_number_entry.insert(0, loan_number)
-        self._assess_loan()
+        self._set_output(
+            f"Running overdue analysis for {loan_number}...\n\nPlease wait.")
+
+        def run():
+            try:
+                from app.core.services.loan_service import LoanService
+                from app.core.services.client_service import ClientService
+                from app.core.services.repayment_service import RepaymentService
+                from app.core.agents.local_scorer import LocalScorer
+                from datetime import date
+
+                # ── Load data ──────────────────────────────────────────────
+                loans = LoanService.get_all_loans()
+                loan  = next(
+                    (l for l in loans
+                     if l.loan_number.upper() == loan_number.upper()), None)
+                if not loan:
+                    self._set_output(f"Loan '{loan_number}' not found.")
+                    return
+
+                client     = ClientService.get_client_by_id(loan.client_id)
+                repayments = RepaymentService.get_repayments_for_loan(loan.id)
+                balance    = RepaymentService.get_outstanding_balance(loan.id)
+                today      = date.today()
+
+                name  = client.full_name    if client else "—"
+                phone = client.phone_number if client else "—"
+                occ   = client.occupation   if client else "—"
+
+                principal       = float(loan.principal_amount or 0)
+                total_interest  = float(loan.total_interest or 0)
+                total_repayable = float(loan.total_repayable or 0)
+                monthly_inst    = float(loan.monthly_installment or 0)
+                duration        = int(loan.duration_months or 0)
+                due_date        = loan.due_date
+                disb_date       = loan.disbursement_date or loan.approval_date
+
+                # ── Repayment analysis ─────────────────────────────────────
+                total_paid   = sum(float(r.amount) for r in repayments)
+                num_payments = len(repayments)
+                days_overdue = (today - due_date).days if due_date else 0
+
+                if disb_date and monthly_inst > 0:
+                    months_elapsed = max(
+                        1, round((today - disb_date).days / 30))
+                    expected_paid = min(
+                        months_elapsed * monthly_inst, total_repayable)
+                    payment_gap = max(0, expected_paid - total_paid)
+                else:
+                    months_elapsed = duration
+                    expected_paid  = total_repayable
+                    payment_gap    = max(0, total_repayable - total_paid)
+
+                consistency = (
+                    total_paid / total_repayable
+                    if total_repayable > 0 else 0.0)
+
+                # Interest accruing on outstanding balance
+                months_overdue   = max(1, days_overdue // 30)
+                interest_at_risk = float(balance) * 0.10 * months_overdue
+
+                # ── Risk re-rating based on actual behaviour ───────────────
+                monthly_income = 0.0
+                if client and client.monthly_income:
+                    try:
+                        monthly_income = float(
+                            str(client.monthly_income).replace(",", ""))
+                    except Exception:
+                        pass
+
+                score = LocalScorer.score(
+                    principal           = principal,
+                    duration_months     = duration,
+                    loan_type           = loan.loan_type.value
+                                         if loan.loan_type else "Business Loan",
+                    occupation          = occ,
+                    monthly_income      = monthly_income,
+                    previous_defaults   = 1 if days_overdue > 90 else 0,
+                    payment_consistency = consistency,
+                )
+
+                # ── Recovery recommendation ────────────────────────────────
+                if days_overdue <= 30:
+                    recovery = (
+                        "CONTACT IMMEDIATELY — phone call + WhatsApp.\n"
+                        "  • Offer a 7-day grace period if client shows willingness.\n"
+                        "  • Request part payment to demonstrate commitment."
+                    )
+                elif days_overdue <= 90:
+                    recovery = (
+                        "ESCALATE TO MANAGEMENT — schedule a physical visit.\n"
+                        "  • Issue a formal demand letter.\n"
+                        "  • Discuss restructuring: extend duration to reduce monthly load.\n"
+                        "  • Engage guarantor or co-signatory if applicable."
+                    )
+                else:
+                    recovery = (
+                        "CRITICAL — CONSIDER DEFAULT PROCEEDINGS.\n"
+                        "  • Engage legal team or debt collector.\n"
+                        "  • Evaluate collateral recovery options.\n"
+                        "  • Document all contact attempts for legal record.\n"
+                        "  • Offer final settlement discount for lump-sum payment."
+                    )
+
+                # ── Repayment history lines ────────────────────────────────
+                rep_lines = []
+                if repayments:
+                    for r in sorted(repayments,
+                                    key=lambda x: x.payment_date or today):
+                        rep_lines.append(
+                            f"  {r.payment_date}   "
+                            f"UGX {float(r.amount):>12,.0f}   "
+                            f"{r.payment_method.value if r.payment_method else '—'}"
+                        )
+                else:
+                    rep_lines.append("  No payments recorded.")
+
+                # ── Build output ───────────────────────────────────────────
+                risk_icon = {"LOW": "🟢", "MEDIUM": "🟡",
+                             "HIGH": "🔴"}.get(score.rating, "⚪")
+
+                lines = [
+                    f"OVERDUE LOAN ANALYSIS — {loan_number}",
+                    "=" * 52,
+                    f"Client:           {name}",
+                    f"Phone:            {phone}",
+                    f"Occupation:       {occ}",
+                    f"Loan Type:        {loan.loan_type.value if loan.loan_type else '—'}",
+                    "",
+                    "─" * 52,
+                    "LOAN FINANCIALS",
+                    "─" * 52,
+                    f"Principal:        UGX {principal:>14,.0f}",
+                    f"Total Interest:   UGX {total_interest:>14,.0f}",
+                    f"Total Repayable:  UGX {total_repayable:>14,.0f}",
+                    f"Monthly Install:  UGX {monthly_inst:>14,.0f}",
+                    f"Duration:         {duration} months",
+                    f"Due Date:         {due_date}",
+                    f"Days Overdue:     {days_overdue} days",
+                    "",
+                    "─" * 52,
+                    "REPAYMENT STATUS",
+                    "─" * 52,
+                    f"Total Paid:       UGX {total_paid:>14,.0f}  ({num_payments} payment(s))",
+                    f"Expected by Now:  UGX {expected_paid:>14,.0f}",
+                    f"Payment Gap:      UGX {payment_gap:>14,.0f}",
+                    f"Outstanding Bal:  UGX {float(balance):>14,.0f}",
+                    f"Recovery Rate:    {consistency:.0%} of total repayable",
+                    f"Interest at Risk: UGX {interest_at_risk:>14,.0f}  "
+                    f"({months_overdue} month(s) at 10%/mo)",
+                    "",
+                    "REPAYMENT HISTORY:",
+                ] + rep_lines + [
+                    "",
+                    "─" * 52,
+                    "RISK RE-ASSESSMENT (based on actual behaviour)",
+                    "─" * 52,
+                    f"{risk_icon} Risk Rating:   {score.rating}  "
+                    f"({score.confidence}% confidence)",
+                    f"Model:            {score.model_used}",
+                    "",
+                    "Reasoning:",
+                ] + [f"  • {r}" for r in score.reasoning] + [
+                    "",
+                    "─" * 52,
+                    "RECOVERY RECOMMENDATION",
+                    "─" * 52,
+                    recovery,
+                    "=" * 52,
+                ]
+
+                self._set_output("\n".join(lines))
+
+            except Exception as e:
+                self._set_output(f"Error running overdue analysis: {e}")
+
+        threading.Thread(target=run, daemon=True).start()
