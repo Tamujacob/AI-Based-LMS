@@ -636,9 +636,9 @@ class AgentScreen(ctk.CTkFrame):
                 pass
             self._credit_popup = None
 
-    # ══════════════════════════════════════════════════════════════════════════
+    
     # Actions
-    # ══════════════════════════════════════════════════════════════════════════
+    
 
     def _set_output(self, text: str):
         self.after(0, lambda: self._do_set_output(text))
