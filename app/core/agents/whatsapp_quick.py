@@ -24,6 +24,9 @@ class QuickWhatsApp:
     Utility for WhatsApp integration without external APIs.
     Safe for background threads. Never blocks UI.
     """
+    # Track which phone chats we've opened during this app session so we
+    # don't repeatedly open new browser tabs for the same contact.
+    _opened_chats = set()
 
     @staticmethod
     def open_whatsapp_chat(phone: str, message: str) -> bool:
@@ -51,14 +54,58 @@ class QuickWhatsApp:
             if clean_phone.startswith("0"):
                 clean_phone = "256" + clean_phone[1:]
             
-            # URL-encode message
-            encoded_msg = urllib.parse.quote(message)
-            
-            # Build WhatsApp Web URL
-            url = f"https://wa.me/{clean_phone}?text={encoded_msg}"
-            
-            # Open in browser
-            webbrowser.open(url)
+            # If we've already opened a chat for this phone during this
+            # session, don't call the browser again (that creates another
+            # tab). Instead just copy the message to clipboard so the user
+            # can paste into the existing WhatsApp tab.
+            if clean_phone in QuickWhatsApp._opened_chats:
+                QuickWhatsApp.copy_to_clipboard(message)
+                return True
+
+            # Build stable WhatsApp Web chat URL for the phone number.
+            url = f"https://web.whatsapp.com/send?phone={clean_phone}"
+
+            # Attempt to find an existing Chrome/Chromium instance with
+            # remote debugging enabled and reuse an open WhatsApp Web tab
+            # by instructing it to navigate to the chat URL. This avoids
+            # creating a new tab each time. If this fails, fall back to
+            # opening the URL in the default browser.
+            try:
+                # Import lazily so the feature is optional.
+                import requests
+                import json
+                from websocket import create_connection
+
+                devtools_url = "http://127.0.0.1:9222/json"
+                resp = requests.get(devtools_url, timeout=0.6)
+                targets = resp.json()
+                # Prefer a tab that already has web.whatsapp.com open.
+                for t in targets:
+                    tu = t.get("url", "")
+                    ws_url = t.get("webSocketDebuggerUrl")
+                    if tu and "web.whatsapp.com" in tu and ws_url:
+                        try:
+                            ws = create_connection(ws_url, timeout=1)
+                            # Send Page.navigate to the target to reuse the tab
+                            msg = json.dumps({"id": 1, "method": "Page.navigate", "params": {"url": url}})
+                            ws.send(msg)
+                            ws.close()
+                            QuickWhatsApp.copy_to_clipboard(message)
+                            QuickWhatsApp._opened_chats.add(clean_phone)
+                            return True
+                        except Exception:
+                            # If navigating this tab fails, try next target
+                            continue
+            except Exception:
+                # Remote debugging not available or an error occurred —
+                # we'll fall back to opening a new tab below.
+                pass
+
+            # Copy the message to clipboard and open the chat in browser
+            # (fallback behavior).
+            QuickWhatsApp.copy_to_clipboard(message)
+            webbrowser.open(url, new=0, autoraise=True)
+            QuickWhatsApp._opened_chats.add(clean_phone)
             return True
             
         except Exception as e:

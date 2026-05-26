@@ -34,3 +34,10 @@ python-dateutil>=2.9.0
 # ── Statement parsing — image/screenshot OCR (optional) ───────────────────────
 # Uncomment to enable OCR support for statement screenshots:
 # pytesseract>=0.3.10
+
+# ── Browser automation (optional) ─────────────────────────────────────────────
+# Enables reusing an existing Chrome tab via the DevTools protocol. To use,
+# start Chrome with `--remote-debugging-port=9222` and enable the feature in
+# app settings.
+requests>=2.30.0
+websocket-client>=1.6.0

@@ -1044,7 +1044,9 @@ class DashboardScreen(ctk.CTkFrame):
 
             ok = QuickWhatsApp.open_whatsapp_chat(phone, full_message)
             if ok:
-                self._show_quick_message("Opening WhatsApp...")
+                self._show_quick_message(
+                    "Opening WhatsApp and copying message to clipboard. Paste into the chat."
+                )
             else:
                 self._show_quick_message("Could not open WhatsApp.")
         except Exception as e:
