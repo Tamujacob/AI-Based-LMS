@@ -930,7 +930,8 @@ class AgentScreen(ctk.CTkFrame):
         # One wide inner frame — the horizontal scrollable frame scrolls this
         # left/right. All rows fill="x" inside this fixed-width container.
         # Total width = sum of all column widths + buttons
-        TOTAL_W = 10 + 110 + 140 + 90 + 90 + 120 + 110 + 64 + 58 + 30
+        # Updated: added WhatsApp button (72px) to the total width
+        TOTAL_W = 10 + 110 + 140 + 90 + 90 + 120 + 110 + 72 + 64 + 58 + 30
         inner = ctk.CTkFrame(
             self.reminders_frame,
             fg_color=COLORS["bg_card"],
@@ -957,7 +958,7 @@ class AgentScreen(ctk.CTkFrame):
             ("Status",     90),
             ("Balance",   120),
             ("Phone",     110),
-            ("Actions",   122),
+            ("Actions",   194),  # Updated: 72 (WhatsApp) + 64 (Copy) + 58 (Assess)
         ]:
             ctk.CTkLabel(
                 hdr, text=col_text,
@@ -1043,7 +1044,22 @@ class AgentScreen(ctk.CTkFrame):
                 width=110, anchor="w",
             ).pack(side="left", padx=(4, 0))
 
-            # Buttons
+            # Buttons — WhatsApp + Copy + Assess
+            # WhatsApp button
+            ctk.CTkButton(
+                row, text="💬 WhatsApp",
+                width=72, height=26,
+                fg_color="#25D366",  # WhatsApp green
+                hover_color="#1FA851",
+                text_color="#FFFFFF",
+                font=FONTS["caption"], corner_radius=4,
+                command=lambda phone=r.phone, msg=r.message, \
+                        loan_num=r.loan_number, amt=r.amount_due, \
+                        due=r.due_date, days=r.days_until: \
+                        self._open_whatsapp(phone, msg, loan_num, amt, due, days),
+            ).pack(side="left", padx=(4, 0), pady=5)
+
+            # Copy message button
             ctk.CTkButton(
                 row, text="📋 Copy",
                 width=64, height=26,
@@ -1052,9 +1068,13 @@ class AgentScreen(ctk.CTkFrame):
                 text_color=COLORS["text_secondary"],
                 font=FONTS["caption"], corner_radius=4,
                 border_width=1, border_color=COLORS["border"],
-                command=lambda msg=r.message: self._copy_reminder(msg),
+                command=lambda phone=r.phone, msg=r.message, \
+                        loan_num=r.loan_number, amt=r.amount_due, \
+                        due=r.due_date, days=r.days_until: \
+                        self._copy_reminder_smart(phone, msg, loan_num, amt, due, days),
             ).pack(side="left", padx=(4, 0), pady=5)
 
+            # Assess button
             ctk.CTkButton(
                 row, text="Assess",
                 width=58, height=26,
@@ -1066,7 +1086,118 @@ class AgentScreen(ctk.CTkFrame):
                 command=lambda ln=r.loan_number: self._quick_assess(ln),
             ).pack(side="left", padx=(4, 6), pady=5)
 
+    def _open_whatsapp(self, phone: str, message: str, loan_number: str,
+                       amount_due: float, due_date, days_until: int):
+        """Open WhatsApp Web with pre-filled message."""
+        try:
+            from app.core.agents.whatsapp_quick import QuickWhatsApp
+            
+            full_message = QuickWhatsApp.format_reminder_for_whatsapp(
+                loan_number=loan_number,
+                client_name="",
+                amount_due=amount_due,
+                due_date=str(due_date),
+                days_until=days_until,
+                message=message,
+            )
+            
+            success = QuickWhatsApp.open_whatsapp_chat(phone, full_message)
+            
+            if success:
+                self._set_output(
+                    f"✅ Opening WhatsApp for {phone}\n\n"
+                    f"Your message is pre-filled. Click Send to deliver.\n\n"
+                    f"─" * 44 + "\n"
+                    + full_message
+                )
+            else:
+                self._set_output(
+                    f"❌ Could not open WhatsApp.\n\n"
+                    f"Please check the phone number: {phone}"
+                )
+        except Exception as e:
+            self._set_output(f"❌ Error: {e}")
+
+    def _copy_reminder_smart(self, phone: str, message: str, loan_number: str,
+                             amount_due: float, due_date, days_until: int):
+        """Copy formatted reminder message to clipboard."""
+        try:
+            from app.core.agents.whatsapp_quick import QuickWhatsApp
+            
+            full_message = QuickWhatsApp.format_reminder_for_whatsapp(
+                loan_number=loan_number,
+                client_name="",
+                amount_due=amount_due,
+                due_date=str(due_date),
+                days_until=days_until,
+                message=message,
+            )
+            
+            success = QuickWhatsApp.copy_to_clipboard(full_message)
+            
+            if success:
+                self._set_output(
+                    "✅ Message copied to clipboard!\n\n"
+                    "Paste it into WhatsApp manually.\n\n"
+                    f"Phone: {phone}\n\n"
+                    f"─" * 44 + "\n"
+                    + full_message
+                )
+            else:
+                self._set_output(
+                    "❌ Could not copy to clipboard.\n\n"
+                    "Try again or use 'Open WhatsApp' button."
+                )
+        except Exception as e:
+            self._set_output(f"❌ Error: {e}")
+
     def _copy_reminder(self, message: str):
+        """Legacy method — kept for compatibility."""
+        self.clipboard_clear()
+        self.clipboard_append(message)
+        self._set_output(
+            "WhatsApp message copied to clipboard!\n\n"
+            "─" * 44 + "\n"
+            + message
+        )
+
+    def _copy_reminder_smart(self, phone: str, message: str, loan_number: str,
+                             amount_due: float, due_date, days_until: int):
+        """Copy formatted reminder message to clipboard."""
+        try:
+            from app.core.agents.whatsapp_quick import QuickWhatsApp
+            
+            # Format complete message with metadata
+            full_message = QuickWhatsApp.format_reminder_for_whatsapp(
+                loan_number=loan_number,
+                client_name="",
+                amount_due=amount_due,
+                due_date=str(due_date),
+                days_until=days_until,
+                message=message,
+            )
+            
+            # Copy to clipboard
+            success = QuickWhatsApp.copy_to_clipboard(full_message)
+            
+            if success:
+                self._set_output(
+                    "✅ Message copied to clipboard!\n\n"
+                    "Paste it into WhatsApp manually.\n\n"
+                    f"Phone: {phone}\n\n"
+                    f"─" * 44 + "\n"
+                    + full_message
+                )
+            else:
+                self._set_output(
+                    "❌ Could not copy to clipboard.\n\n"
+                    "Try again or use 'Open WhatsApp' button."
+                )
+        except Exception as e:
+            self._set_output(f"❌ Error: {e}")
+
+    def _copy_reminder(self, message: str):
+        """Legacy method — kept for compatibility."""
         self.clipboard_clear()
         self.clipboard_append(message)
         self._set_output(
