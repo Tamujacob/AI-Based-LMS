@@ -591,14 +591,14 @@ class DashboardScreen(ctk.CTkFrame):
         col_hdr.pack_propagate(False)
 
         for col_text, width in [
-            ("Type",        120),
-            ("Loan No.",     90),
-            ("Client",      120),
-            ("NIN",         110),
-            ("Message",     200),
-            ("Date",         90),
-            ("Severity",     72),
-            ("",             68),
+            ("Type",        110),
+            ("Loan No.",     80),
+            ("Client",      100),
+            ("NIN",          90),
+            ("Message",     140),
+            ("Date",         80),
+            ("Severity",     64),
+            ("",             90),
         ]:
             ctk.CTkLabel(
                 col_hdr, text=col_text,
@@ -706,20 +706,25 @@ class DashboardScreen(ctk.CTkFrame):
             anchor="w",
         ).pack(side="left", padx=(0, 4))
 
-        # Message preview — plain label (no button; row itself is clickable)
-        first_line = notif["message"].split("\n")[0][:38]
-        if len(notif["message"].split("\n")[0]) > 38:
-            first_line += "…"
+        # Message preview — remove loan number from the preview and keep it short.
+        raw_message = notif.get("message", "")
+        first_line = raw_message.split("\n")[0]
+        if " — " in first_line:
+            first_line = first_line.split(" — ", 1)[0]
+        loan_num = notif.get("loan_number") or ""
+        if loan_num and loan_num in first_line:
+            first_line = first_line.replace(loan_num, "").strip()
+        if len(first_line) > 28:
+            first_line = first_line[:28].rstrip() + "…"
 
         ctk.CTkLabel(
             row,
-            text=first_line,
+            text=first_line or "Notification",
             font=FONTS["body_small"],
             text_color=(COLORS["text_primary"] if not is_read
                         else COLORS["text_secondary"]),
-            width=200,
             anchor="w",
-        ).pack(side="left", padx=(0, 8))
+        ).pack(side="left", padx=(0, 8), fill="x", expand=True)
 
         # Date
         ctk.CTkLabel(
@@ -727,7 +732,7 @@ class DashboardScreen(ctk.CTkFrame):
             text=str(notif["notif_date"]),
             font=FONTS["caption"],
             text_color=COLORS["text_muted"],
-            width=90,
+            width=80,
             anchor="w",
         ).pack(side="left", padx=(0, 8))
 
@@ -742,44 +747,83 @@ class DashboardScreen(ctk.CTkFrame):
             width=72,
         ).pack(side="left", padx=(0, 6))
 
-        # "✓ Read" button — pack first so side="right" lands before row binding
+        action_frame = ctk.CTkFrame(
+            row,
+            fg_color=COLORS["bg_card"],
+            corner_radius=0,
+        )
+        action_frame.pack(side="right", padx=(0, 10), fill="y")
+        action_frame.bind("<Button-1>", lambda e: "break")
+
+        # WhatsApp button
+        whatsapp_btn = ctk.CTkButton(
+            action_frame,
+            text="💬",
+            width=42, height=28,
+            fg_color="#25D366",
+            hover_color="#1FA851",
+            text_color="#FFFFFF",
+            font=FONTS["caption"], corner_radius=4,
+            command=lambda n=notif: self._open_whatsapp_notification(n),
+        )
+        whatsapp_btn.pack(side="right", padx=(4, 0))
+        whatsapp_btn.bind("<Button-1>", lambda e: "break")
+
+        # Copy button
+        copy_btn = ctk.CTkButton(
+            action_frame,
+            text="📋",
+            width=42, height=28,
+            fg_color=COLORS["bg_card"],
+            hover_color=COLORS["accent_green"],
+            text_color=COLORS["text_secondary"],
+            font=FONTS["caption"], corner_radius=4,
+            border_width=1, border_color=COLORS["border"],
+            command=lambda n=notif: self._copy_notification(n),
+        )
+        copy_btn.pack(side="right", padx=(4, 0))
+        copy_btn.bind("<Button-1>", lambda e: "break")
+
+        # "✓ Read" button (opens the detail popup and disappears after marking read)
         read_btn = None
         if not is_read:
             read_btn = ctk.CTkButton(
-                row,
+                action_frame,
                 text="✓ Read",
-                width=60, height=28,
+                width=54, height=28,
                 fg_color="#FFFFFF",
                 hover_color=COLORS["accent_green"],
                 text_color=COLORS["text_secondary"],
-                font=FONTS["caption"],
-                corner_radius=4,
+                font=FONTS["caption"], corner_radius=4,
                 border_width=1,
                 border_color=COLORS["border"],
-                command=lambda nid=notif["id"]: self._mark_one_read(nid),
             )
-            read_btn.pack(side="right", padx=8)
+            read_btn.configure(
+                command=lambda n=notif, btn_ref=read_btn:
+                    self._show_and_mark(n, btn_ref)
+            )
+            read_btn.pack(side="right", padx=(4, 0))
+            read_btn.bind("<Button-1>", lambda e: "break")
 
-        # ── Bind entire row to open the detail popup ──────────────────────
-        # Collect every child widget except the "✓ Read" button so that
-        # clicking anywhere else on the row fires the popup.
-        def _open(_e, n=notif):
-            self._show_notif_detail(n)
-
+        # Row hover effect
         def _highlight(_e):
             row.configure(fg_color=hover_bg)
 
         def _unhighlight(_e):
             row.configure(fg_color=bg)
 
-        clickable = [row] + [
-            w for w in row.winfo_children()
-            if w is not read_btn
-        ]
-        for widget in clickable:
-            widget.bind("<Button-1>", _open)
-            widget.bind("<Enter>",    _highlight)
-            widget.bind("<Leave>",    _unhighlight)
+        for widget in [row, action_frame]:
+            widget.bind("<Enter>", _highlight)
+            widget.bind("<Leave>", _unhighlight)
+
+        # Click the row to open full notification detail popup.
+        def _open(_e, n=notif):
+            self._show_notif_detail(n)
+
+        row.bind("<Button-1>", _open)
+        for widget in row.winfo_children():
+            if widget is not action_frame:
+                widget.bind("<Button-1>", _open)
 
     def _show_notif_detail(self, notif: dict):
         """Show full notification message in a popup.
@@ -941,15 +985,120 @@ class DashboardScreen(ctk.CTkFrame):
         # NOTE: grab_set() intentionally removed — it blocked all subsequent
         # notification click events until the first popup was closed.
 
-    def _mark_one_read(self, notif_id: int):
+    def _show_quick_message(self, text: str, duration_ms: int = 1500):
+        """Show a small transient popup message near the top-right of the app."""
+        import tkinter as tk
+
+        try:
+            msg = tk.Toplevel(self)
+            msg.overrideredirect(True)
+            msg.attributes("-topmost", True)
+            label = tk.Label(
+                msg, text=text,
+                bg=COLORS.get("bg_card", "#FFFFFF"),
+                fg=COLORS.get("text_primary", "#1A202C"),
+                font=("Helvetica", 10), bd=1, relief="solid", padx=8, pady=6
+            )
+            label.pack()
+
+            # Position near top-right of main window
+            msg.update_idletasks()
+            w = msg.winfo_width()
+            h = msg.winfo_height()
+            x = self.winfo_rootx() + max(16, self.winfo_width() - w - 40)
+            y = self.winfo_rooty() + 40
+            msg.geometry(f"{w}x{h}+{x}+{y}")
+
+            # Auto-destroy after duration
+            self.after(duration_ms, lambda: (msg.destroy() if msg.winfo_exists() else None))
+        except Exception:
+            # Fallback: print to console if UI popup fails
+            print(text)
+
+    def _open_whatsapp_notification(self, notif: dict):
+        """Open WhatsApp Web for a notification message (non-blocking)."""
+        try:
+            from app.core.agents.whatsapp_quick import QuickWhatsApp
+            import re
+
+            loan = notif.get("loan_number") or ""
+            client = notif.get("client_name") or ""
+            phone = notif.get("client_phone") or ""
+            msg_text = notif.get("message", "")
+
+            # Try to extract an amount (UGX 123,456) from the notification message
+            m = re.search(r"UGX\s*([0-9,]+)", msg_text)
+            amount = float(m.group(1).replace(",", "")) if m else 0.0
+
+            due_date = str(notif.get("notif_date") or "")
+            days_until = 0
+
+            full_message = QuickWhatsApp.format_reminder_for_whatsapp(
+                loan_number=loan,
+                client_name=client,
+                amount_due=amount,
+                due_date=due_date,
+                days_until=days_until,
+                message=msg_text,
+            )
+
+            ok = QuickWhatsApp.open_whatsapp_chat(phone, full_message)
+            if ok:
+                self._show_quick_message("Opening WhatsApp...")
+            else:
+                self._show_quick_message("Could not open WhatsApp.")
+        except Exception as e:
+            self._show_quick_message(f"Error: {e}")
+
+    def _copy_notification(self, notif: dict):
+        """Copy the notification message (formatted) to clipboard."""
+        try:
+            from app.core.agents.whatsapp_quick import QuickWhatsApp
+            import re
+
+            loan = notif.get("loan_number") or ""
+            client = notif.get("client_name") or ""
+            msg_text = notif.get("message", "")
+
+            m = re.search(r"UGX\s*([0-9,]+)", msg_text)
+            amount = float(m.group(1).replace(",", "")) if m else 0.0
+
+            due_date = str(notif.get("notif_date") or "")
+            days_until = 0
+
+            full_message = QuickWhatsApp.format_reminder_for_whatsapp(
+                loan_number=loan,
+                client_name=client,
+                amount_due=amount,
+                due_date=due_date,
+                days_until=days_until,
+                message=msg_text,
+            )
+
+            ok = QuickWhatsApp.copy_to_clipboard(full_message)
+            if ok:
+                self._show_quick_message("Message copied to clipboard!")
+            else:
+                self._show_quick_message("Could not copy message.")
+        except Exception as e:
+            self._show_quick_message(f"Error: {e}")
+
+    def _mark_one_read(self, notif_id: int, button_widget=None):
         def run():
             try:
                 from app.core.agents.background_agent import BackgroundAgent
                 BackgroundAgent.mark_notification_read(notif_id)
-                self.after(0, self._reload_notifications)
+                if button_widget is not None:
+                    self.after(0, lambda: button_widget.destroy())
+                else:
+                    self.after(0, self._reload_notifications)
             except Exception as e:
                 print(f"[Dashboard] mark_read error: {e}")
         threading.Thread(target=run, daemon=True).start()
+
+    def _show_and_mark(self, notif: dict, button_widget=None):
+        self._show_notif_detail(notif)
+        self._mark_one_read(notif["id"], button_widget)
 
     def _show_notif_error(self, msg: str):
         for w in self.notif_container.winfo_children():
