@@ -636,9 +636,9 @@ class AgentScreen(ctk.CTkFrame):
                 pass
             self._credit_popup = None
 
-    
+    # ══════════════════════════════════════════════════════════════════════════
     # Actions
-    
+    # ══════════════════════════════════════════════════════════════════════════
 
     def _set_output(self, text: str):
         self.after(0, lambda: self._do_set_output(text))
@@ -1161,12 +1161,22 @@ class AgentScreen(ctk.CTkFrame):
                                          if loan.loan_type else "Business Loan",
                     occupation          = occ,
                     monthly_income      = monthly_income,
-                    previous_defaults   = 1 if days_overdue > 90 else 0,
+                    # Only flag as default if genuinely unpaid AND overdue
+                    previous_defaults   = 1 if (days_overdue > 90
+                                                and float(balance) > 0) else 0,
                     payment_consistency = consistency,
                 )
 
                 # ── Recovery recommendation ────────────────────────────────
-                if days_overdue <= 30:
+                if float(balance) <= 0:
+                    recovery = (
+                        "✅ FULLY RECOVERED — No action required.\n"
+                        "  • Loan has been repaid in full.\n"
+                        "  • Loan status should be marked as Completed.\n"
+                        "  • Consider offering this client a follow-up loan\n"
+                        "    given their strong repayment record."
+                    )
+                elif days_overdue <= 30:
                     recovery = (
                         "CONTACT IMMEDIATELY — phone call + WhatsApp.\n"
                         "  • Offer a 7-day grace period if client shows willingness.\n"
