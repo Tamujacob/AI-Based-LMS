@@ -27,6 +27,10 @@ class QuickWhatsApp:
     # Track which phone chats we've opened during this app session so we
     # don't repeatedly open new browser tabs for the same contact.
     _opened_chats = set()
+    # Whether the last call actually opened a browser tab (True) or only
+    # copied the message to clipboard (False). Callers may read this to
+    # decide which user-facing message to show.
+    _last_opened = False
 
     @staticmethod
     def open_whatsapp_chat(phone: str, message: str) -> bool:
@@ -60,6 +64,7 @@ class QuickWhatsApp:
             # can paste into the existing WhatsApp tab.
             if clean_phone in QuickWhatsApp._opened_chats:
                 QuickWhatsApp.copy_to_clipboard(message)
+                QuickWhatsApp._last_opened = False
                 return True
 
             # Build stable WhatsApp Web chat URL for the phone number.
@@ -92,6 +97,7 @@ class QuickWhatsApp:
                             ws.close()
                             QuickWhatsApp.copy_to_clipboard(message)
                             QuickWhatsApp._opened_chats.add(clean_phone)
+                            QuickWhatsApp._last_opened = True
                             return True
                         except Exception:
                             # If navigating this tab fails, try next target
@@ -106,6 +112,7 @@ class QuickWhatsApp:
             QuickWhatsApp.copy_to_clipboard(message)
             webbrowser.open(url, new=0, autoraise=True)
             QuickWhatsApp._opened_chats.add(clean_phone)
+            QuickWhatsApp._last_opened = True
             return True
             
         except Exception as e:

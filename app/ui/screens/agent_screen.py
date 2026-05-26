@@ -1102,14 +1102,22 @@ class AgentScreen(ctk.CTkFrame):
             )
             
             success = QuickWhatsApp.open_whatsapp_chat(phone, full_message)
-            
+
             if success:
-                self._set_output(
-                    f"✅ Opening WhatsApp for {phone}\n\n"
-                    f"Your message is pre-filled. Click Send to deliver.\n\n"
-                    f"─" * 44 + "\n"
-                    + full_message
-                )
+                if getattr(QuickWhatsApp, "_last_opened", False):
+                    self._set_output(
+                        f"✅ Opening WhatsApp for {phone}\n\n"
+                        f"Your message is ready in a new tab. Click Send to deliver.\n\n"
+                        f"─" * 44 + "\n"
+                        + full_message
+                    )
+                else:
+                    self._set_output(
+                        f"✅ Message copied to clipboard for {phone}.\n\n"
+                        f"Switch to WhatsApp Web and paste into the existing tab.\n\n"
+                        f"─" * 44 + "\n"
+                        + full_message
+                    )
             else:
                 self._set_output(
                     f"❌ Could not open WhatsApp.\n\n"
