@@ -52,76 +52,93 @@ The system was designed and case-studied at **Bingongold Credit**, a growing mic
 AI-Based_LMS/
 │
 ├── main.py                          # Entry point — run this to start
-├── .env                             # Environment variables (never commit)
 ├── .env.example                     # Safe template for environment setup
 ├── requirements.txt                 # All Python dependencies
 ├── README.md
 │
 ├── app/
+│   ├── __init__.py
 │   ├── config/
+│   │   ├── __init__.py
 │   │   └── settings.py              # Central settings — DB URL, API keys, constants
 │   │
 │   ├── database/
+│   │   ├── __init__.py
 │   │   ├── base.py                  # SQLAlchemy declarative base
 │   │   └── connection.py            # Engine, session factory, get_db() context manager
 │   │                                # Pool: size=20, overflow=30, timeout=5s, semaphore=8
 │   │
 │   ├── core/
+│   │   ├── __init__.py
+│   │   ├── agents/
+│   │   │   ├── __init__.py
+│   │   │   ├── ai_core.py           # Groq API router — online/offline fallback
+│   │   │   ├── auto_risk.py         # Dynamic overdue risk and recovery scoring
+│   │   │   ├── background_agent.py  # Background AI task orchestration
+│   │   │   ├── credit_scorer.py     # Credit scoring logic
+│   │   │   ├── loan_ceiling_engine.py # Calculates max safe loan from statement
+│   │   │   ├── local_scorer.py      # Offline ML risk scoring
+│   │   │   ├── model_trainer.py     # Trains RandomForestClassifier
+│   │   │   ├── payment_planner.py   # Repayment schedule generator
+│   │   │   ├── reminder_service.py  # Overdue loan alert service
+│   │   │   └── statement_parser.py  # Parses MTN/Airtel/bank PDF statements
+│   │   │
 │   │   ├── models/
-│   │   │   ├── user.py              # Staff accounts (admin / manager / loan_officer)
+│   │   │   ├── __init__.py
+│   │   │   ├── audit_log.py         # Full system audit trail
 │   │   │   ├── client.py            # Borrower profiles
+│   │   │   ├── collateral.py        # Document attachments per loan
 │   │   │   ├── loan.py              # Loan records and financial fields
 │   │   │   ├── repayment.py         # Payment transactions
-│   │   │   ├── collateral.py        # Document attachments per loan
-│   │   │   ├── audit_log.py         # Full system audit trail
-│   │   │   └── statement_analysis.py # Stores statement analysis results per loan
+│   │   │   ├── statement_analysis.py # Stores statement analysis results per loan
+│   │   │   └── user.py              # Staff accounts (admin / manager / loan_officer)
 │   │   │
 │   │   ├── services/
+│   │   │   ├── __init__.py
+│   │   │   ├── audit_service.py     # Audit log insertion and retrieval
 │   │   │   ├── auth_service.py      # Login, bcrypt password hashing
 │   │   │   ├── client_service.py    # Client CRUD operations
 │   │   │   ├── loan_service.py      # Loan lifecycle and interest calculation
 │   │   │   ├── repayment_service.py # Payment recording and balance tracking
 │   │   │   └── report_service.py    # PDF and Word report generation
-│   │   │
-│   │   └── agents/
-│   │       ├── ai_core.py           # Groq API router — online/offline fallback
-│   │       ├── ai_agent.py          # Risk assessment and portfolio scanning
-│   │       ├── chatbot.py           # Natural language chatbot with DB context
-│   │       ├── statement_parser.py  # Parses MTN/Airtel/bank PDF statements
-│   │       ├── loan_ceiling_engine.py # Calculates max safe loan from statement
-│   │       ├── credit_scorer.py     # Credit scoring logic
-│   │       ├── local_scorer.py      # Offline ML risk scoring
-│   │       ├── model_trainer.py     # Trains RandomForestClassifier
-│   │       ├── payment_planner.py   # Repayment schedule generator
-│   │       └── reminder_service.py  # Overdue loan alert service
 │   │
-│   └── ui/
-│       ├── app_root.py              # Root window — screen caching, 30s refresh throttle
-│       ├── styles/
-│       │   └── theme.py             # Colors, fonts, widget style presets
-│       │
-│       ├── components/
-│       │   ├── sidebar.py           # Navigation sidebar (logo cached at class level)
-│       │   ├── data_table.py        # Reusable scrollable data table
-│       │   ├── stat_card.py         # Dashboard KPI card
-│       │   ├── date_picker.py       # Date picker widget
-│       │   ├── save_dialog.py       # Themed save/open file dialogs
-│       │   └── statement_analysis_widget.py  # Statement upload + 3-scenario cards
-│       │
-│       └── screens/
-│           ├── login_screen.py      # Two-column branded login
-│           ├── dashboard_screen.py  # KPI cards, loan status overview, recent activity
-│           ├── clients_screen.py    # Searchable client table + add/edit form
-│           ├── loans_screen.py      # Loan list, new loan form, statement analysis
-│           ├── repayments_screen.py # Record payments, print receipts, payment history
-│           ├── agent_screen.py      # AI risk scoring and portfolio scan
-│           ├── chatbot_screen.py    # AI chat with 📎 statement upload button
-│           ├── reports_screen.py    # One-click PDF and Word generation
-│           ├── users_screen.py      # User management (admin only)
-│           ├── logs_screen.py       # Audit log viewer
-│           └── settings_screen.py  # App settings, Groq model selector
+│   ├── ui/
+│   │   ├── __init__.py
+│   │   ├── app_root.py              # Root window — screen caching, 30s refresh throttle
+│   │   ├── components/
+│   │   │   ├── __init__.py
+│   │   │   ├── data_table.py        # Reusable scrollable data table
+│   │   │   ├── date_picker.py       # Date picker widget
+│   │   │   ├── save_dialog.py       # Themed save/open file dialogs
+│   │   │   ├── sidebar.py           # Navigation sidebar
+│   │   │   ├── stat_card.py         # Dashboard KPI card
+│   │   │   ├── statement_analysis_widget.py  # Statement upload + 3-scenario cards
+│   │   │   └── statement_result_card.py    # Result card for statement analysis output
+│   │   ├── screens/
+│   │   │   ├── agent_screen.py      # AI risk scoring and portfolio scan
+│   │   │   ├── chatbot_screen.py    # AI chat with 📎 statement upload button
+│   │   │   ├── clients_screen.py    # Searchable client table + add/edit form
+│   │   │   ├── dashboard_screen.py  # KPI cards, loan status overview, recent activity
+│   │   │   ├── loans_screen.py      # Loan list, new loan form, statement analysis
+│   │   │   ├── login_screen.py      # Branded login interface
+│   │   │   ├── logs_screen.py       # Audit log viewer
+│   │   │   ├── repayments_screen.py # Record payments, print receipts, payment history
+│   │   │   ├── reports_screen.py    # One-click PDF and Word generation
+│   │   │   ├── settings_screen.py   # App settings, Groq model selector
+│   │   │   └── users_screen.py      # User management (admin only)
+│   │   │
+│   │   └── styles/
+│   │       ├── __init__.py
+│   │       └── theme.py             # Colors, fonts, widget style presets
+│   │
+│   └── utils/
+│       ├── __init__.py
 │
 ├── assets/
+│   ├── icons/
+│   │   ├── generate_icons.py
+│   │   └── assets/
+│   │       └── icons/
 │   └── images/
 │       └── logo.png                 # Bingongold Credit logo
 │
@@ -131,15 +148,19 @@ AI-Based_LMS/
 │       └── training_data_200.json   # 200 synthetic records for ML training
 │
 ├── models/
-│   ├── risk_model.pkl               # Trained RandomForest model
-│   └── feature_info.json            # Model feature metadata
+│   ├── feature_info.json            # Model feature metadata
+│   └── risk_model.pkl               # Trained RandomForest model
+│
+├── reports/                        # Generated reports output directory
 │
 └── scripts/
+    ├── add_indexes.py              # Add DB indexes for query performance
     ├── create_admin.py              # One-time: create first admin account
-    ├── train_model.py               # Train offline risk scoring model
+    ├── migrate_agent_notifications.py  # Database migration helper for agent notifications
+    ├── reset_and_reseed.py          # Drop all tables, recreate, seed sample data
+    ├── seed_database.py             # Seed initial clients, loans, users, and repayments
     ├── test_training_data.py        # Validate training data before training
-    ├── reset_and_reseed.py          # Drop all tables, recreate, seed 50 records
-    └── add_indexes.py               # Add DB indexes for query performance
+    └── train_model.py               # Train offline risk scoring model
 ```
 
 ---
