@@ -67,6 +67,11 @@ class ReminderService:
 
                 client  = ClientService.get_client_by_id(loan.client_id)
                 balance = RepaymentService.get_outstanding_balance(loan.id)
+
+                # Skip loans that are fully paid — balance = 0 means
+                # the loan is recovered regardless of the due date.
+                if float(balance) <= 0:
+                    continue
                 phone   = client.phone_number if client else ""
                 name    = client.full_name if client else "Borrower"
 
