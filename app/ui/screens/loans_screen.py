@@ -361,6 +361,8 @@ class LoansScreen(ctk.CTkFrame):
         self._found_client_obj = None
         self._statement_analysed = False
         self._search_popup     = None
+        self._loan_popup       = None
+        self._saved_detail_panel = None
 
         # Pagination
         self.current_page  = 1
@@ -805,8 +807,42 @@ class LoansScreen(ctk.CTkFrame):
         self._statement_analysed = False
         self._search_popup       = None
 
-        for w in self.detail_panel.winfo_children():
-            w.destroy()
+        if loan is None:
+            # Open the new loan form in a larger popup window.
+            self._saved_detail_panel = self.detail_panel
+            popup = tk.Toplevel(self.winfo_toplevel())
+            popup.title("New Loan Application")
+            popup.configure(bg=_LIGHT)
+            popup.resizable(True, True)
+            popup.geometry("980x860")
+            popup.transient(self.winfo_toplevel())
+            popup.update_idletasks()
+            popup.deiconify()
+            popup.wait_visibility()
+            popup.grab_set()
+
+            self.detail_panel = ctk.CTkScrollableFrame(
+                popup, fg_color=COLORS["bg_card"], corner_radius=12,
+                border_width=1, border_color=COLORS["border"],
+                scrollbar_button_color=COLORS["accent_green"],
+                scrollbar_button_hover_color=COLORS["accent_green_dark"],
+            )
+            self.detail_panel.pack(fill="both", expand=True, padx=16, pady=16)
+            self.detail_panel.columnconfigure(0, weight=1)
+            self._loan_popup = popup
+
+            def _close_popup():
+                if self._loan_popup and self._loan_popup.winfo_exists():
+                    self._loan_popup.destroy()
+                self._loan_popup = None
+                self.detail_panel = self._saved_detail_panel
+                self._saved_detail_panel = None
+                self._show_empty_state()
+
+            popup.protocol("WM_DELETE_WINDOW", _close_popup)
+        else:
+            for w in self.detail_panel.winfo_children():
+                w.destroy()
 
         title_text = "Edit Pending Loan" if loan else "New Loan Application"
         ctk.CTkLabel(self.detail_panel, text=title_text,
@@ -1460,6 +1496,13 @@ class LoansScreen(ctk.CTkFrame):
             self._found_client_obj   = None
 
             self._load_loans()
+            if self._loan_popup:
+                self._loan_popup.destroy()
+                self._loan_popup = None
+                self.detail_panel = self._saved_detail_panel
+                self._saved_detail_panel = None
+                self._show_empty_state()
+                return
             if (self.selected_loan
                     and self.selected_loan.status.value == "pending"):
                 self._on_loan_selected({"id": loan.id})
