@@ -899,7 +899,7 @@ class LoansScreen(ctk.CTkFrame):
         self.client_search_entry.bind("<KeyRelease>", self._on_client_key)
         self.client_search_entry.bind(
             "<FocusOut>",
-            lambda e: self.after(300, self._close_client_popup))
+            lambda e: self.after(250, self._handle_client_entry_focus_out))
 
         # Selected client display card
         self.client_card = ctk.CTkFrame(
@@ -1091,6 +1091,20 @@ class LoansScreen(ctk.CTkFrame):
         else:
             self._close_client_popup()
 
+    def _handle_client_entry_focus_out(self, event=None):
+        if not self._search_popup:
+            return
+
+        try:
+            x = self.winfo_pointerx()
+            y = self.winfo_pointery()
+            if self._search_popup.winfo_containing(x, y):
+                return
+        except Exception:
+            pass
+
+        self._close_client_popup()
+
     def _fetch_clients_for_popup(self, term: str):
         try:
             from app.core.services.client_service import ClientService
@@ -1157,25 +1171,22 @@ class LoansScreen(ctk.CTkFrame):
                      font=("Helvetica", 8),
                      anchor="w").pack(fill="x")
 
-            # Right: Select button
-            tk.Button(row,
-                      text="Select →",
-                      bg=_GREEN, fg=_WHITE,
-                      activebackground=_GREEN_DARK,
-                      activeforeground=_WHITE,
-                      relief="flat", bd=0,
-                      font=("Helvetica", 9, "bold"),
-                      padx=10, pady=4,
-                      cursor="hand2",
-                      command=lambda c=client: self._select_client(c),
-                      ).pack(side="right", padx=8, pady=6)
+            # Right block: select label acts like a button
+            right = tk.Frame(row, bg=bg)
+            right.pack(side="right", padx=8, pady=6)
+            select_label = tk.Label(right,
+                                    text="Select →",
+                                    bg=_GREEN, fg=_WHITE,
+                                    font=("Helvetica", 9, "bold"),
+                                    padx=10, pady=6,
+                                    cursor="hand2")
+            select_label.pack()
 
             # 1-px divider between rows
             if i < len(shown) - 1:
                 tk.Frame(border, bg=_BORDER, height=1).pack(fill="x")
 
-            # Entire row is clickable (excluding the button which has its own cmd)
-            for widget in [row, left] + list(left.winfo_children()):
+            def bind_click(widget):
                 widget.bind("<Button-1>",
                             lambda e, c=client: self._select_client(c))
                 widget.bind("<Enter>",
@@ -1183,9 +1194,18 @@ class LoansScreen(ctk.CTkFrame):
                 widget.bind("<Leave>",
                             lambda e, r=row, b=bg: r.configure(bg=b))
 
+            # Entire row is selectable, including the select label
+            for widget in [row, left, right, select_label] + list(left.winfo_children()):
+                bind_click(widget)
+
         # Let tk compute natural height from content, then size the window
         popup.update_idletasks()
         popup.geometry(f"{w}x{popup.winfo_reqheight()}+{x}+{y}")
+        try:
+            popup.grab_set()
+            popup.focus_force()
+        except Exception:
+            pass
 
     def _select_client(self, client):
         self._close_client_popup()
@@ -1222,11 +1242,46 @@ class LoansScreen(ctk.CTkFrame):
         phone = client.phone_number or "—"
         occ   = client.occupation   or "—"
 
-        self.client_card_label.configure(
-            text=(f"✔  {client.full_name}\n"
-                  f"NIN: {nin}   Phone: {phone}\n"
-                  f"Occupation: {occ}   Stated Income: {inc_str}"),
-            text_color=COLORS["accent_green"])
+        if (not hasattr(self, "client_card_label")
+                or not self.client_card_label.winfo_exists()):
+            # Recreate the client card label if it was destroyed or missing.
+            if (not hasattr(self, "client_card")
+                    or not self.client_card.winfo_exists()):
+                self.client_card = ctk.CTkFrame(
+                    self.detail_panel,
+                    fg_color=COLORS["bg_input"], corner_radius=8)
+                self.client_card.pack(fill="x", padx=20, pady=(6, 0))
+            self.client_card_label = ctk.CTkLabel(
+                self.client_card,
+                text="",
+                font=FONTS["body_small"],
+                text_color=COLORS["text_muted"],
+                anchor="w", justify="left")
+            self.client_card_label.pack(padx=12, pady=10, anchor="w")
+
+        try:
+            self.client_card_label.configure(
+                text=(f"✔  {client.full_name}\n"
+                      f"NIN: {nin}   Phone: {phone}\n"
+                      f"Occupation: {occ}   Stated Income: {inc_str}"),
+                text_color=COLORS["accent_green"])
+        except tk.TclError:
+            # The old label was destroyed; recreate it and configure again.
+            if (not hasattr(self, "client_card")
+                    or not self.client_card.winfo_exists()):
+                self.client_card = ctk.CTkFrame(
+                    self.detail_panel,
+                    fg_color=COLORS["bg_input"], corner_radius=8)
+                self.client_card.pack(fill="x", padx=20, pady=(6, 0))
+            self.client_card_label = ctk.CTkLabel(
+                self.client_card,
+                text=(f"✔  {client.full_name}\n"
+                      f"NIN: {nin}   Phone: {phone}\n"
+                      f"Occupation: {occ}   Stated Income: {inc_str}"),
+                font=FONTS["body_small"],
+                text_color=COLORS["accent_green"],
+                anchor="w", justify="left")
+            self.client_card_label.pack(padx=12, pady=10, anchor="w")
 
     def _close_client_popup(self):
         if self._search_popup:
