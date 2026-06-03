@@ -15,6 +15,8 @@ Smart Refresh:
 
 import time
 import threading
+import os
+import tkinter as tk
 import customtkinter as ctk
 from app.ui.styles.theme import configure_theme, COLORS
 from app.config.settings import APP_NAME, WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT
@@ -33,6 +35,17 @@ class AppRoot(ctk.CTk):
         self.title(APP_NAME)
         self.configure(fg_color=COLORS["bg_primary"])
         self.update_idletasks()
+        # Set application icon if available
+        try:
+            self._set_window_icon()
+        except Exception:
+            pass
+        try:
+            # Set a WM_CLASS so GNOME can match the window to a .desktop
+            # entry with `StartupWMClass=bingongold-credit`.
+            self.tk.call('wm', 'class', self._w, 'bingongold-credit')
+        except Exception:
+            pass
         self._setup_window()
 
         self.current_user        = None
@@ -203,6 +216,56 @@ class AppRoot(ctk.CTk):
                 raise ValueError(f"Unknown screen: '{name}'")
         return self._screen_classes[name]
 
+    def _set_window_icon(self):
+        """Load `assets/images/icon.png` (with common fallbacks) and set as window icon.
+
+        Uses PIL.ImageTk when available for reliable PNG handling. Keeps a
+        reference on `self._app_icon` to avoid garbage collection.
+        """
+        search_paths = [
+            "assets/images/icon.png",
+            "assets/images/logo.png",
+            "./assets/images/icon.png",
+            "./assets/images/logo.png",
+            os.path.expanduser("~/Desktop/AI-Based-LMS/assets/images/icon.png"),
+            os.path.expanduser("~/Desktop/AI-Based-LMS/assets/images/logo.png"),
+        ]
+        for path in search_paths:
+            if os.path.exists(path):
+                try:
+                    # Prefer PIL ImageTk for broader format support
+                    try:
+                        from PIL import Image, ImageTk
+                        img = Image.open(path)
+                        img.thumbnail((128, 128), Image.LANCZOS)
+                        icon = ImageTk.PhotoImage(img)
+                    except Exception:
+                        icon = tk.PhotoImage(file=path)
+
+                    # Keep reference to prevent GC
+                    self._app_icon = icon
+                    try:
+                        # Prefer iconphoto on modern Tk
+                        self.iconphoto(True, icon)
+                    except Exception:
+                        try:
+                            self.wm_iconphoto(True, icon)
+                        except Exception:
+                            pass
+                    # Extra WM call for some Linux window managers
+                    try:
+                        self.tk.call('wm', 'iconphoto', self._w, icon)
+                    except Exception:
+                        try:
+                            # Last-resort: iconbitmap with .ico (may fail silently)
+                            self.wm_iconbitmap(icon)
+                        except Exception:
+                            pass
+                    return
+                except Exception:
+                    # Could not load this image — try next
+                    pass
+
     # ── Public method for manual refresh (e.g. Refresh button) ────────────────
 
     def force_refresh(self, screen_name: str = None):
@@ -236,7 +299,7 @@ class AppRoot(ctk.CTk):
         self.show_screen("dashboard")
 
     def logout(self):
-        # ── NEW: stop the background agent on logout ───────────────────
+        
         try:
             from app.core.agents.background_agent import BackgroundAgent
             BackgroundAgent.stop()
