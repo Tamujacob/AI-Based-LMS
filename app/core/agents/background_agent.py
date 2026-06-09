@@ -95,6 +95,9 @@ class BackgroundAgent:
     # Days before monthly due date to send an upcoming-payment alert
     UPCOMING_ALERT_DAYS = 10
 
+    # Days overdue before the agent automatically marks a loan as defaulted
+    DEFAULTED_THRESHOLD_DAYS = 180
+
     # ══════════════════════════════════════════════════════════════════════════
     # Public API
     # ══════════════════════════════════════════════════════════════════════════
@@ -508,7 +511,8 @@ class BackgroundAgent:
           LOW      →  1–6 days past final due date
           MEDIUM   →  7–29 days
           HIGH     →  30–89 days
-          CRITICAL →  90+ days (recommend default proceedings)
+          CRITICAL →  90–179 days (recommend default proceedings)
+          DEFAULTED → 180+ days (agent auto-marks loan as defaulted)
         """
         try:
             from app.core.services.loan_service    import LoanService
@@ -539,6 +543,16 @@ class BackgroundAgent:
                 client_name  = client.full_name    if client else "Unknown"
                 client_phone = client.phone_number if client else "—"
                 balance      = RepaymentService.get_outstanding_balance(loan.id)
+                defaulted    = False
+
+                if days_overdue >= cls.DEFAULTED_THRESHOLD_DAYS and balance > 0:
+                    try:
+                        LoanService.mark_defaulted(loan.id)
+                        defaulted = True
+                        severity = "DEFAULTED"
+                    except Exception:
+                        logger.exception(
+                            f"[BackgroundAgent] Failed to default loan {loan.loan_number}")
 
                 created = cls._create_notification_if_new(
                     loan_id    = loan.id,
@@ -555,7 +569,7 @@ class BackgroundAgent:
                         f"Loan type: {loan.loan_type.value if loan.loan_type else '—'}"
                         + (
                             "\n⚠ RECOMMEND: initiate default proceedings"
-                            if severity == "CRITICAL" else ""
+                            if severity in ("CRITICAL", "DEFAULTED") else ""
                         )
                     ),
                     extra_key  = None,   # one notification per loan per day
@@ -581,6 +595,7 @@ class BackgroundAgent:
                             "severity":       severity,
                             "balance":        str(balance),
                             "detected_on":    str(today),
+                            "defaulted":      defaulted,
                         },
                     )
 
