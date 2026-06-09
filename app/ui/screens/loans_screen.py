@@ -1037,6 +1037,9 @@ class LoansScreen(ctk.CTkFrame):
             text_color=COLORS["text_muted"], anchor="w")
         self.stmt_status_label.pack(fill="x", padx=20, pady=(2, 0))
 
+        # NOTE: The statement widget contains the canonical stated-income
+        # entry used for analysis. Avoid duplicating it here.
+
         # ══════════════════════════════════════════════════════════════════
         # COLLATERAL
         # ══════════════════════════════════════════════════════════════════
@@ -1235,6 +1238,13 @@ class LoansScreen(ctk.CTkFrame):
                 # Store raw value for scoring
                 if hasattr(self, "income_var"):
                     self.income_var.set(str(int(inc_val)))
+                    # Also prefill the statement widget's fallback field
+                    if (hasattr(self, "statement_widget")
+                            and hasattr(self.statement_widget, "stated_income_var")):
+                        try:
+                            self.statement_widget.stated_income_var.set(str(int(inc_val)))
+                        except Exception:
+                            pass
             except (ValueError, TypeError):
                 pass
 
@@ -1423,8 +1433,12 @@ class LoansScreen(ctk.CTkFrame):
 
         # Statement reminder — warn once, allow second click to proceed
         if not self._statement_analysed:
-            income_raw = self.income_var.get().strip() if hasattr(
-                self, "income_var") else ""
+            if (hasattr(self, "statement_widget")
+                    and hasattr(self.statement_widget, "stated_income_var")):
+                income_raw = self.statement_widget.stated_income_var.get().strip()
+            else:
+                income_raw = self.income_var.get().strip() if hasattr(
+                    self, "income_var") else ""
             if income_raw and not getattr(self, "_stmt_warning_shown", False):
                 self._stmt_warning_shown = True
                 self.loan_form_error.configure(
