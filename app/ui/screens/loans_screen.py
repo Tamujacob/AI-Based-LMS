@@ -424,7 +424,7 @@ class LoansScreen(ctk.CTkFrame):
         self.status_filter = ctk.CTkOptionMenu(
             filter_row,
             values=["All", "pending", "approved", "active",
-                    "completed", "defaulted", "rejected"],
+                    "overdue", "completed", "defaulted", "rejected"],
             command=self._on_status_change,
             fg_color=COLORS["bg_input"],
             button_color=COLORS["accent_green"],
@@ -1654,8 +1654,13 @@ class LoansScreen(ctk.CTkFrame):
                 params     = {}
 
                 if status and status != "All":
-                    conditions.append("l.status = :status")
-                    params["status"] = status
+                    if status == "overdue":
+                        conditions.append(
+                            "l.status = 'active' "
+                            "AND l.due_date < CURRENT_DATE")
+                    else:
+                        conditions.append("l.status = :status")
+                        params["status"] = status
 
                 if search:
                     conditions.append(

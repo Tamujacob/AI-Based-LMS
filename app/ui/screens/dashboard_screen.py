@@ -171,16 +171,23 @@ class DashboardScreen(ctk.CTkFrame):
         self.card_total    = StatCard(cf, "UGX", "Total Portfolio",  "—",
                                       accent=COLORS["accent_green"])
         self.card_active   = StatCard(cf, "✓",   "Active Loans",     "—",
-                                      accent=COLORS["accent_green_dark"])
+                                      accent=COLORS["accent_green_dark"],
+                                      cursor="hand2")
         self.card_overdue  = StatCard(cf, "!",   "Overdue Loans",    "—",
-                                      accent=COLORS["danger"])
+                                      accent=COLORS["danger"],
+                                      cursor="hand2")
         self.card_clients  = StatCard(cf, "P",   "Total Clients",    "—",
-                                      accent=COLORS["accent_gold"])
+                                      accent=COLORS["accent_gold"],
+                                      cursor="hand2")
 
         self.card_total.grid(row=0,   column=0, padx=(0, 8), sticky="ew")
         self.card_active.grid(row=0,  column=1, padx=8,      sticky="ew")
         self.card_overdue.grid(row=0, column=2, padx=8,      sticky="ew")
         self.card_clients.grid(row=0, column=3, padx=(8, 0), sticky="ew")
+
+        self._attach_card_click(self.card_active, self._show_active_loans)
+        self._attach_card_click(self.card_overdue, self._show_overdue_loans)
+        self._attach_card_click(self.card_clients, self._show_clients)
 
     # ── Reminder banner ────────────────────────────────────────────────────
 
@@ -245,6 +252,42 @@ class DashboardScreen(ctk.CTkFrame):
         self._status_cards  = {}
         for i, (key, label, color, bg, hover) in enumerate(STATUS_CONFIG):
             self._build_status_card(i, key, label, color, bg, hover)
+
+    def _attach_card_click(self, card, command):
+        def on_click(_e, cmd=command):
+            cmd()
+
+        def bind_recursive(widget):
+            widget.bind("<Button-1>", on_click)
+            for child in widget.winfo_children():
+                bind_recursive(child)
+
+        bind_recursive(card)
+
+    def _show_active_loans(self):
+        self._navigate_loans(status="active")
+
+    def _show_overdue_loans(self):
+        self._navigate_loans(status="overdue")
+
+    def _show_clients(self):
+        self._navigate("clients")
+
+    def _navigate_loans(self, status: str):
+        self.master.show_screen("loans")
+        loans_screen = getattr(self.master, "_screen_cache", {}).get("loans")
+        if not loans_screen:
+            return
+
+        if hasattr(loans_screen, "status_filter"):
+            try:
+                loans_screen.status_filter.set(status)
+            except Exception:
+                pass
+        if hasattr(loans_screen, "current_page"):
+            loans_screen.current_page = 1
+        if hasattr(loans_screen, "_load_loans"):
+            threading.Thread(target=loans_screen._load_loans, daemon=True).start()
 
     def _build_status_card(self, col, key, label, color, bg_color, hover_color):
         card = ctk.CTkFrame(self.status_frame, fg_color=bg_color,
