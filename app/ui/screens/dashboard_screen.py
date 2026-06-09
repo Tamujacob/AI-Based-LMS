@@ -29,6 +29,7 @@ from datetime import date, timedelta
 from app.ui.styles.theme import COLORS, FONTS
 from app.ui.components.sidebar import Sidebar
 from app.ui.components.stat_card import StatCard
+from app.ui.components.data_table import DataTable
 
 STATUS_CONFIG = [
     ("pending",   "Pending",   "#F39C12", "#FEF9E7", "#E67E22"),
@@ -85,6 +86,11 @@ class DashboardScreen(ctk.CTkFrame):
         self._notif_filter      = "all"   # "all" | "week" | "unread"
         self._notif_total       = 0
 
+        self.details_mode       = None
+        self.details_page       = 1
+        self.details_page_size  = 10
+        self.details_total      = 0
+
         # Tracks open detail popups keyed by notification id
         # so we never open a duplicate and can close stale ones
         self._open_popups: dict = {}
@@ -130,6 +136,7 @@ class DashboardScreen(ctk.CTkFrame):
         self._build_stat_cards()
         self._build_reminder_banner()
         self._build_loan_status_row()
+        self._build_details_panel()
         self._build_notifications_panel()
 
     # ── Header ─────────────────────────────────────────────────────────────
@@ -265,29 +272,275 @@ class DashboardScreen(ctk.CTkFrame):
         bind_recursive(card)
 
     def _show_active_loans(self):
-        self._navigate_loans(status="active")
+        threading.Thread(target=self._load_dashboard_loans, args=("active",), daemon=True).start()
 
     def _show_overdue_loans(self):
-        self._navigate_loans(status="overdue")
+        threading.Thread(target=self._load_dashboard_loans, args=("overdue",), daemon=True).start()
 
     def _show_clients(self):
-        self._navigate("clients")
+        threading.Thread(target=self._load_dashboard_clients, daemon=True).start()
 
-    def _navigate_loans(self, status: str):
-        self.master.show_screen("loans")
-        loans_screen = getattr(self.master, "_screen_cache", {}).get("loans")
-        if not loans_screen:
-            return
+    def _build_details_panel(self):
+        self.details_frame = ctk.CTkFrame(
+            self.content,
+            fg_color=COLORS["bg_card"],
+            corner_radius=12,
+            border_width=1,
+            border_color=COLORS["border"],
+        )
+        self.details_frame.grid(row=6, column=0, sticky="ew", padx=28, pady=(20, 0))
+        self.details_frame.columnconfigure(0, weight=1)
 
-        if hasattr(loans_screen, "status_filter"):
-            try:
-                loans_screen.status_filter.set(status)
-            except Exception:
-                pass
-        if hasattr(loans_screen, "current_page"):
-            loans_screen.current_page = 1
-        if hasattr(loans_screen, "_load_loans"):
-            threading.Thread(target=loans_screen._load_loans, daemon=True).start()
+        header = ctk.CTkFrame(self.details_frame, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="ew", padx=16, pady=(16, 4))
+        header.columnconfigure(0, weight=1)
+
+        self.details_title = ctk.CTkLabel(
+            header,
+            text="Click a KPI card to view details",
+            font=FONTS["title"],
+            text_color=COLORS["accent_green_dark"],
+            anchor="w",
+        )
+        self.details_title.grid(row=0, column=0, sticky="w")
+
+        self.details_subtitle = ctk.CTkLabel(
+            header,
+            text="Active loans, overdue loans, or client records show here.",
+            font=FONTS["body_small"],
+            text_color=COLORS["text_muted"],
+            anchor="w",
+        )
+        self.details_subtitle.grid(row=1, column=0, sticky="w", pady=(4, 0))
+
+        self.details_table = DataTable(
+            self.details_frame,
+            columns=[],
+            rows=[],
+        )
+        self.details_table.grid(
+            row=1, column=0, sticky="nsew", padx=16, pady=(0, 16))
+
+        pager = ctk.CTkFrame(self.details_frame, fg_color="transparent")
+        pager.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 16))
+        pager.columnconfigure(1, weight=1)
+
+        self.details_prev_btn = ctk.CTkButton(
+            pager, text="◀ Prev", width=100,
+            fg_color=COLORS["bg_input"],
+            hover_color=COLORS["bg_hover"],
+            text_color=COLORS["text_secondary"],
+            font=FONTS["body_small"],
+            corner_radius=6,
+            command=self._details_prev_page,
+        )
+        self.details_prev_btn.grid(row=0, column=0, sticky="w")
+
+        self.details_page_label = ctk.CTkLabel(
+            pager, text="Page 1 of 1",
+            font=FONTS["body_small"],
+            text_color=COLORS["text_muted"],
+        )
+        self.details_page_label.grid(row=0, column=1)
+
+        self.details_next_btn = ctk.CTkButton(
+            pager, text="Next ▶", width=100,
+            fg_color=COLORS["accent_green"],
+            hover_color=COLORS["accent_green_dark"],
+            text_color="#FFFFFF",
+            font=FONTS["body_small"],
+            corner_radius=6,
+            command=self._details_next_page,
+        )
+        self.details_next_btn.grid(row=0, column=2, sticky="e")
+
+    def _show_dashboard_details(self, title: str, subtitle: str,
+                                columns: list, rows: list):
+        self.details_title.configure(text=title)
+        self.details_subtitle.configure(text=subtitle)
+
+        self.details_table.destroy()
+        self.details_table = DataTable(
+            self.details_frame,
+            columns=columns,
+            rows=rows,
+        )
+        self.details_table.grid(
+            row=1, column=0, sticky="nsew", padx=16, pady=(0, 16))
+        self._update_details_pagination_controls()
+
+    def _update_details_pagination_controls(self):
+        total_pages = max(
+            1,
+            (self.details_total + self.details_page_size - 1)
+            // self.details_page_size,
+        )
+        self.details_page_label.configure(
+            text=f"Page {self.details_page} of {total_pages}")
+        self.details_prev_btn.configure(
+            state="normal" if self.details_page > 1 else "disabled")
+        self.details_next_btn.configure(
+            state="normal" if self.details_page < total_pages else "disabled")
+
+    def _details_prev_page(self):
+        if self.details_page > 1 and self.details_mode:
+            self.details_page -= 1
+            if self.details_mode in ("active", "overdue"):
+                threading.Thread(
+                    target=self._load_dashboard_loans,
+                    args=(self.details_mode, self.details_page),
+                    daemon=True,
+                ).start()
+            elif self.details_mode == "clients":
+                threading.Thread(
+                    target=self._load_dashboard_clients,
+                    args=(self.details_page,),
+                    daemon=True,
+                ).start()
+
+    def _details_next_page(self):
+        total_pages = max(
+            1,
+            (self.details_total + self.details_page_size - 1)
+            // self.details_page_size,
+        )
+        if self.details_page < total_pages and self.details_mode:
+            self.details_page += 1
+            if self.details_mode in ("active", "overdue"):
+                threading.Thread(
+                    target=self._load_dashboard_loans,
+                    args=(self.details_mode, self.details_page),
+                    daemon=True,
+                ).start()
+            elif self.details_mode == "clients":
+                threading.Thread(
+                    target=self._load_dashboard_clients,
+                    args=(self.details_page,),
+                    daemon=True,
+                ).start()
+
+    def _load_dashboard_loans(self, mode: str, page: int = 1):
+        try:
+            self.details_mode = mode
+            self.details_page = page
+            from app.database.connection import get_db
+            from sqlalchemy import text
+
+            offset = (self.details_page - 1) * self.details_page_size
+
+            if mode == "active":
+                title = "Active Loans"
+                subtitle = "Showing active loans currently in repayment."
+                sql = text(
+                    "SELECT l.loan_number, c.full_name as client_name, "
+                    "l.loan_type, "
+                    "COALESCE(l.principal_amount, 0) as principal_amount, "
+                    "l.due_date "
+                    "FROM loans l "
+                    "JOIN clients c ON l.client_id = c.id "
+                    "WHERE l.status = 'active' "
+                    "ORDER BY l.id DESC "
+                    "LIMIT :limit OFFSET :offset"
+                )
+            else:
+                title = "Overdue Loans"
+                subtitle = "Showing active loans that are past their due date."
+                sql = text(
+                    "SELECT l.loan_number, c.full_name as client_name, "
+                    "l.loan_type, "
+                    "COALESCE(l.principal_amount, 0) as principal_amount, "
+                    "l.due_date "
+                    "FROM loans l "
+                    "JOIN clients c ON l.client_id = c.id "
+                    "WHERE l.status = 'active' "
+                    "AND l.due_date < CURRENT_DATE "
+                    "ORDER BY l.id DESC "
+                    "LIMIT :limit OFFSET :offset"
+                )
+
+            with get_db() as db:
+                rows = [
+                    {
+                        "loan_number": r.loan_number or "—",
+                        "client_name": r.client_name or "—",
+                        "loan_type":   str(r.loan_type) if r.loan_type else "—",
+                        "principal":   f"UGX {float(r.principal_amount):,.0f}",
+                        "due_date":    str(r.due_date) if r.due_date else "—",
+                    }
+                    for r in db.execute(sql, {
+                        "limit": self.details_page_size,
+                        "offset": offset,
+                    }).mappings()
+                ]
+
+                count_sql = text(
+                    "SELECT COUNT(*) FROM loans l "
+                    "JOIN clients c ON l.client_id = c.id "
+                    "WHERE l.status = 'active' "
+                    + ("AND l.due_date < CURRENT_DATE "
+                       if mode == 'overdue' else "")
+                )
+                self.details_total = db.execute(count_sql).scalar() or 0
+
+            columns = [
+                ("loan_number", "Loan No.", 110),
+                ("client_name", "Client", 160),
+                ("loan_type", "Type", 120),
+                ("principal", "Principal", 115),
+                ("due_date", "Due Date", 110),
+            ]
+            self.after(0, lambda: self._show_dashboard_details(
+                title, subtitle, columns, rows))
+        except Exception as e:
+            print(f"[Dashboard] Load dashboard loans error: {e}")
+
+    def _load_dashboard_clients(self, page: int = 1):
+        try:
+            self.details_mode = "clients"
+            self.details_page = page
+            from app.database.connection import get_db
+            from sqlalchemy import text
+
+            title = "Clients"
+            subtitle = "Showing active client records."
+            offset = (self.details_page - 1) * self.details_page_size
+            sql = text(
+                "SELECT full_name, nin, phone_number, occupation "
+                "FROM clients "
+                "WHERE is_active = true "
+                "ORDER BY id DESC "
+                "LIMIT :limit OFFSET :offset"
+            )
+            with get_db() as db:
+                rows = [
+                    {
+                        "full_name":    r.full_name or "—",
+                        "nin":          r.nin or "—",
+                        "phone_number": r.phone_number or "—",
+                        "occupation":   r.occupation or "—",
+                    }
+                    for r in db.execute(sql, {
+                        "limit": self.details_page_size,
+                        "offset": offset,
+                    }).mappings()
+                ]
+
+                count_sql = text(
+                    "SELECT COUNT(*) FROM clients "
+                    "WHERE is_active = true"
+                )
+                self.details_total = db.execute(count_sql).scalar() or 0
+
+            columns = [
+                ("full_name", "Full Name", 200),
+                ("nin", "NIN", 120),
+                ("phone_number", "Phone", 120),
+                ("occupation", "Occupation", 160),
+            ]
+            self.after(0, lambda: self._show_dashboard_details(
+                title, subtitle, columns, rows))
+        except Exception as e:
+            print(f"[Dashboard] Load clients error: {e}")
 
     def _build_status_card(self, col, key, label, color, bg_color, hover_color):
         card = ctk.CTkFrame(self.status_frame, fg_color=bg_color,
