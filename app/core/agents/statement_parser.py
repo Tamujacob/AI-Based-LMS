@@ -187,10 +187,17 @@ class StatementParser:
 
         if not raw_text.strip():
             r = StatementResult(source_file=file_path, statement_type="unknown")
-            r.parse_warnings.append(
-                "No text extracted. Ensure pdfplumber is installed and "
-                "the PDF is not password-protected. If password-protected, "
-                "provide the password (last 4 account digits).")
+            if password:
+                r.parse_warnings.append(
+                    "No text extracted. The provided password may be incorrect, "
+                    "or the PDF uses unsupported encryption."
+                )
+            else:
+                r.parse_warnings.append(
+                    "No text extracted. Ensure pdfplumber is installed and "
+                    "the PDF is not password-protected. If password-protected, "
+                    "provide the password (last 4 account digits)."
+                )
             return r
 
         stmt_type = StatementParser._detect_type(raw_text)
@@ -343,54 +350,52 @@ class StatementParser:
         """Returns (full_text, list_of_tables). Supports password-protected PDFs."""
         try:
             import pdfplumber
+        except ImportError:
+            return StatementParser._read_pdf_fallback(path, password=password), []
+
+        try:
             all_text, all_tables = [], []
-            
-            # If password provided, decrypt using pypdf first
+            open_kwargs = {}
             if password:
-                try:
-                    from pypdf import PdfReader, PdfWriter
-                    reader = PdfReader(path)
-                    if reader.is_encrypted:
-                        if reader.decrypt(password):
-                            # Successfully decrypted; create temp decrypted file
-                            writer = PdfWriter()
-                            for page in reader.pages:
-                                writer.add_page(page)
-                            
-                            # Write decrypted PDF to temp location
-                            import tempfile
-                            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-                                with open(tmp.name, "wb") as f:
-                                    writer.write(f)
-                                temp_path = tmp.name
-                            
-                            # Parse decrypted temp file
-                            try:
-                                with pdfplumber.open(temp_path) as pdf:
-                                    for page in pdf.pages:
-                                        all_text.append(page.extract_text() or "")
-                                        for tbl in page.extract_tables():
-                                            all_tables.append(tbl)
-                            finally:
-                                os.unlink(temp_path)  # Clean up temp file
-                            
-                            return "\n".join(all_text), all_tables
-                        else:
-                            logger.warning(f"Password decryption failed for {path}")
-                except Exception as e:
-                    logger.warning(f"Password decryption error: {e}. Trying without password.")
-            
-            # Open without password (or if password decryption failed)
-            with pdfplumber.open(path) as pdf:
+                open_kwargs["password"] = password
+
+            with pdfplumber.open(path, **open_kwargs) as pdf:
                 for page in pdf.pages:
                     all_text.append(page.extract_text() or "")
                     for tbl in page.extract_tables():
                         all_tables.append(tbl)
-            return "\n".join(all_text), all_tables
-        except ImportError:
-            return StatementParser._read_pdf_fallback(path, password=password), []
+
+            text = "\n".join(all_text)
+            if text.strip():
+                return text, all_tables
+            return "", []
         except Exception as e:
-            logger.warning(f"PDF read error: {e}")
+            logger.warning(f"pdfplumber read error for {path}: {e}")
+            return StatementParser._read_pdf_fallback(path, password=password), []
+
+    @staticmethod
+    def _read_pdf_using_pypdf(path: str, password: str = None):
+        try:
+            from pypdf import PdfReader
+            reader = PdfReader(path)
+
+            if reader.is_encrypted:
+                if not password:
+                    logger.warning(f"Encrypted PDF requires a password: {path}")
+                    return "", []
+                result = reader.decrypt(password)
+                if result == 0:
+                    logger.warning(f"Password decryption failed for {path}")
+                    return "", []
+
+            all_text = []
+            for page in reader.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    all_text.append(page_text)
+            return "\n".join(all_text), []
+        except Exception as e:
+            logger.warning(f"pypdf read error for {path}: {e}")
             return "", []
 
     @staticmethod
@@ -398,13 +403,16 @@ class StatementParser:
         try:
             from pypdf import PdfReader
             reader = PdfReader(path)
-            
-            # Try to decrypt if password provided and PDF is encrypted
-            if password and reader.is_encrypted:
-                if not reader.decrypt(password):
+
+            if reader.is_encrypted:
+                if not password:
+                    logger.warning(f"Encrypted PDF requires a password: {path}")
+                    return ""
+                result = reader.decrypt(password)
+                if result == 0:
                     logger.warning(f"Password decryption failed for {path}")
                     return ""
-            
+
             return "\n".join(p.extract_text() or ""
                              for p in reader.pages)
         except Exception as e:

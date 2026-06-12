@@ -144,6 +144,7 @@ class ChatbotScreen(ctk.CTkFrame):
         )
         # Not gridded yet — shown when file is attached
         self.attachment_bar.columnconfigure(0, weight=1)
+        self.attachment_bar.columnconfigure(1, weight=1)
 
         self.attachment_label = ctk.CTkLabel(
             self.attachment_bar,
@@ -153,6 +154,22 @@ class ChatbotScreen(ctk.CTkFrame):
             anchor="w",
         )
         self.attachment_label.grid(row=0, column=0, padx=12, sticky="w")
+
+        self.statement_password_var = ctk.StringVar()
+        self.attachment_password_entry = ctk.CTkEntry(
+            self.attachment_bar,
+            textvariable=self.statement_password_var,
+            placeholder_text="Password for encrypted PDF",
+            show="•",
+            fg_color=COLORS["bg_card"],
+            border_color=COLORS["border"],
+            text_color=COLORS["text_primary"],
+            font=FONTS["body_small"],
+            corner_radius=8,
+            height=30,
+            border_width=1,
+        )
+        self.attachment_password_entry.grid(row=0, column=1, padx=(8, 8), sticky="ew")
 
         ctk.CTkButton(
             self.attachment_bar,
@@ -164,7 +181,7 @@ class ChatbotScreen(ctk.CTkFrame):
             text_color=COLORS["danger"],
             corner_radius=6,
             command=self._remove_attachment,
-        ).grid(row=0, column=1, padx=8)
+        ).grid(row=0, column=2, padx=8)
 
         # ── Input row — fixed height, never behind taskbar ─────────────────
         input_frame = ctk.CTkFrame(
@@ -348,7 +365,8 @@ class ChatbotScreen(ctk.CTkFrame):
                 f"Analysing statement: {os.path.basename(path)}..."))
  
             from app.core.agents.statement_parser import StatementParser
-            result = StatementParser.parse(path, password=None)
+            pw = self.statement_password_var.get().strip() if hasattr(self, "statement_password_var") else None
+            result = StatementParser.parse(path, password=pw if pw else None)
             self._statement_result = result
  
             if result.statement_type == "unknown":
