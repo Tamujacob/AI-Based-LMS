@@ -348,7 +348,7 @@ class ChatbotScreen(ctk.CTkFrame):
                 f"Analysing statement: {os.path.basename(path)}..."))
  
             from app.core.agents.statement_parser import StatementParser
-            result = StatementParser.parse(path)
+            result = StatementParser.parse(path, password=None)
             self._statement_result = result
  
             if result.statement_type == "unknown":

@@ -28,8 +28,7 @@ numpy>=1.26.0
 pandas>=2.0.0
 
 # ── Statement parsing ─────────────────────────────────────────────────────────
-pdfplumber>=0.11.0
-python-dateutil>=2.9.0
+pdfplumber>=0.11.0pypdf>=4.0.0python-dateutil>=2.9.0
 
 # ── Statement parsing — image/screenshot OCR (optional) ───────────────────────
 # Uncomment to enable OCR support for statement screenshots:

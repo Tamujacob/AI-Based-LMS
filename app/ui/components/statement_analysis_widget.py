@@ -102,9 +102,30 @@ class StatementAnalysisWidget(ctk.CTkFrame):
         )
         # Not gridded yet
 
+        # ── Password field for encrypted PDFs ───────────────────────────────
+        pwd_row = ctk.CTkFrame(self, fg_color="transparent")
+        pwd_row.grid(row=3, column=0, sticky="ew", pady=(0, 6))
+        pwd_row.columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            pwd_row,
+            text="PDF Password (if encrypted):",
+            font=FONTS["body_small"],
+            text_color=COLORS["text_secondary"],
+        ).grid(row=0, column=0, padx=(0, 8))
+
+        self.pdf_password_var = ctk.StringVar()
+        ctk.CTkEntry(
+            pwd_row,
+            textvariable=self.pdf_password_var,
+            placeholder_text="e.g. 1234 (last 4 account digits)",
+            show="•",  # Mask password
+            **input_style(),
+        ).grid(row=0, column=1, sticky="ew")
+
         # ── Stated income fallback ──────────────────────────────────────────
         stated_row = ctk.CTkFrame(self, fg_color="transparent")
-        stated_row.grid(row=3, column=0, sticky="ew", pady=(0, 8))
+        stated_row.grid(row=4, column=0, sticky="ew", pady=(0, 8))
         stated_row.columnconfigure(1, weight=1)
 
         ctk.CTkLabel(
@@ -131,7 +152,7 @@ class StatementAnalysisWidget(ctk.CTkFrame):
             hover_color=COLORS["accent_green_dark"],
             text_color="#FFFFFF", corner_radius=8,
             command=self._run_analysis,
-        ).grid(row=4, column=0, sticky="ew", pady=(0, 10))
+        ).grid(row=5, column=0, sticky="ew", pady=(0, 10))
 
         # ── Results text box — income summary ──────────────────────────────
         self.results_box = ctk.CTkTextbox(
@@ -145,7 +166,7 @@ class StatementAnalysisWidget(ctk.CTkFrame):
             border_width=1,
             border_color=COLORS["border"],
         )
-        self.results_box.grid(row=5, column=0, sticky="ew", pady=(0, 8))
+        self.results_box.grid(row=6, column=0, sticky="ew", pady=(0, 8))
         self.results_box.insert("end", "Analysis results will appear here.")
         self.results_box.configure(state="disabled")
 
@@ -170,7 +191,7 @@ class StatementAnalysisWidget(ctk.CTkFrame):
             command=self._accept_standard,
             state="disabled",
         )
-        self.accept_btn.grid(row=8, column=0, sticky="ew", pady=(0, 4))
+        self.accept_btn.grid(row=9, column=0, sticky="ew", pady=(0, 4))
 
     # ── File handling ──────────────────────────────────────────────────────────
 
@@ -239,10 +260,13 @@ class StatementAnalysisWidget(ctk.CTkFrame):
             except Exception:
                 pass
 
+            # Get password if provided
+            password = self.pdf_password_var.get().strip() if hasattr(self, "pdf_password_var") else ""
+
             # Parse statement if uploaded
             parsed = None
             if self._file_path:
-                parsed = StatementParser.parse(self._file_path)
+                parsed = StatementParser.parse(self._file_path, password=password if password else None)
                 self._result = parsed
 
             # Run ceiling engine

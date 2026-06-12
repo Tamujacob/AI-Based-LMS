@@ -159,11 +159,15 @@ class StatementParser:
     # ── Entry point ──────────────────────────────────────────────────────────
 
     @staticmethod
-    def parse(file_path: str) -> StatementResult:
+    def parse(file_path: str, password: str = None) -> StatementResult:
         """
         Parse any Uganda bank / mobile money statement PDF or image.
         Auto-detects institution and extracts client_name, nin, and
         full transaction + monthly summary data.
+        
+        Args:
+            file_path: Path to the statement file (PDF, image, etc.)
+            password: Password for encrypted PDFs (e.g., last 4 account digits)
         """
         if not os.path.exists(file_path):
             r = StatementResult(source_file=file_path, statement_type="unknown")
@@ -172,7 +176,7 @@ class StatementParser:
 
         ext = os.path.splitext(file_path)[1].lower()
         if ext == ".pdf":
-            raw_text, tables = StatementParser._read_pdf(file_path)
+            raw_text, tables = StatementParser._read_pdf(file_path, password=password)
         elif ext in (".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp"):
             raw_text = StatementParser._ocr_image(file_path)
             tables   = []
@@ -185,7 +189,8 @@ class StatementParser:
             r = StatementResult(source_file=file_path, statement_type="unknown")
             r.parse_warnings.append(
                 "No text extracted. Ensure pdfplumber is installed and "
-                "the PDF is not password-protected.")
+                "the PDF is not password-protected. If password-protected, "
+                "provide the password (last 4 account digits).")
             return r
 
         stmt_type = StatementParser._detect_type(raw_text)
@@ -334,11 +339,48 @@ class StatementParser:
     # ── PDF / image reading ──────────────────────────────────────────────────
 
     @staticmethod
-    def _read_pdf(path: str):
-        """Returns (full_text, list_of_tables)."""
+    def _read_pdf(path: str, password: str = None):
+        """Returns (full_text, list_of_tables). Supports password-protected PDFs."""
         try:
             import pdfplumber
             all_text, all_tables = [], []
+            
+            # If password provided, decrypt using pypdf first
+            if password:
+                try:
+                    from pypdf import PdfReader, PdfWriter
+                    reader = PdfReader(path)
+                    if reader.is_encrypted:
+                        if reader.decrypt(password):
+                            # Successfully decrypted; create temp decrypted file
+                            writer = PdfWriter()
+                            for page in reader.pages:
+                                writer.add_page(page)
+                            
+                            # Write decrypted PDF to temp location
+                            import tempfile
+                            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+                                with open(tmp.name, "wb") as f:
+                                    writer.write(f)
+                                temp_path = tmp.name
+                            
+                            # Parse decrypted temp file
+                            try:
+                                with pdfplumber.open(temp_path) as pdf:
+                                    for page in pdf.pages:
+                                        all_text.append(page.extract_text() or "")
+                                        for tbl in page.extract_tables():
+                                            all_tables.append(tbl)
+                            finally:
+                                os.unlink(temp_path)  # Clean up temp file
+                            
+                            return "\n".join(all_text), all_tables
+                        else:
+                            logger.warning(f"Password decryption failed for {path}")
+                except Exception as e:
+                    logger.warning(f"Password decryption error: {e}. Trying without password.")
+            
+            # Open without password (or if password decryption failed)
             with pdfplumber.open(path) as pdf:
                 for page in pdf.pages:
                     all_text.append(page.extract_text() or "")
@@ -346,17 +388,27 @@ class StatementParser:
                         all_tables.append(tbl)
             return "\n".join(all_text), all_tables
         except ImportError:
-            return StatementParser._read_pdf_fallback(path), []
-        except Exception:
+            return StatementParser._read_pdf_fallback(path, password=password), []
+        except Exception as e:
+            logger.warning(f"PDF read error: {e}")
             return "", []
 
     @staticmethod
-    def _read_pdf_fallback(path: str) -> str:
+    def _read_pdf_fallback(path: str, password: str = None) -> str:
         try:
             from pypdf import PdfReader
+            reader = PdfReader(path)
+            
+            # Try to decrypt if password provided and PDF is encrypted
+            if password and reader.is_encrypted:
+                if not reader.decrypt(password):
+                    logger.warning(f"Password decryption failed for {path}")
+                    return ""
+            
             return "\n".join(p.extract_text() or ""
-                             for p in PdfReader(path).pages)
-        except Exception:
+                             for p in reader.pages)
+        except Exception as e:
+            logger.warning(f"PDF fallback read error: {e}")
             return ""
 
     @staticmethod
