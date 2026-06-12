@@ -482,15 +482,23 @@ class ChatbotScreen(ctk.CTkFrame):
         ).pack(fill="x")
 
         bubble = ctk.CTkFrame(wrapper, fg_color=bubble_color, corner_radius=10)
-        bubble.pack(anchor=align, pady=(2, 0))
+        bubble.pack(anchor=align, pady=(2, 0), fill="x")
 
-        ctk.CTkLabel(
-            bubble, text=text,
-            font=FONTS["body_small"],
+        # Use a read-only textbox so users can select and copy message text.
+        txt = ctk.CTkTextbox(
+            bubble,
+            width=1,
+            height=max(100, min(260, 20 + 20 * (text.count('\n') + len(text) // 70))),
+            fg_color=bubble_color,
             text_color=text_color,
-            anchor="w", justify="left",
-            wraplength=480,
-        ).pack(padx=14, pady=10)
+            font=FONTS["body_small"],
+            wrap="word",
+            corner_radius=8,
+            border_width=0,
+        )
+        txt.pack(fill="x", padx=10, pady=10)
+        txt.insert("0.0", text)
+        txt.configure(state="disabled")
 
         self._scroll_to_bottom()
 
