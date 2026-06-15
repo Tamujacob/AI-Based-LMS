@@ -110,6 +110,7 @@ class StatementResult:
     avg_monthly_income:   float = 0.0
     avg_monthly_expense:  float = 0.0
     avg_monthly_net:      float = 0.0
+    net_monthly_flow:     float = 0.0
     months_covered:       int   = 0
     income_consistency:   float = 0.0
     largest_credit:       float = 0.0
@@ -691,16 +692,18 @@ class StatementParser:
     # ══════════════════════════════════════════════════════════════════════════
 
     _DATE_HDRS    = {"date", "txn date", "tran date", "trans date",
-                     "value date", "posting date", "transaction date"}
+                     "value date", "posting date", "transaction date", "posting"}
     _DESC_HDRS    = {"narration", "description", "particulars", "details",
-                     "transaction details", "remarks"}
-    _REF_HDRS     = {"reference", "ref", "cheque", "chq", "ref no", "cheque no"}
+                     "transaction details", "remarks", "description of transaction"}
+    _REF_HDRS     = {"reference", "ref", "cheque", "chq", "ref no", "cheque no",
+                     "cheque number", "reference number", "transaction ref"}
     _DEBIT_HDRS   = {"debit", "withdrawal", "withdrawals", "dr",
                      "amount dr", "debit amount"}
     _CREDIT_HDRS  = {"credit", "deposit", "deposits", "cr",
                      "amount cr", "credit amount"}
     _BALANCE_HDRS = {"balance", "running balance", "closing balance",
-                     "available balance"}
+                     "available balance", "account balance"}
+    _AMOUNT_HDRS  = {"amount", "transaction amount", "amt"}  # single signed column
 
     @staticmethod
     def _parse_bank_debit_credit(file_path, raw_text, tables):
@@ -725,11 +728,16 @@ class StatementParser:
                         tmp["debit"] = ci;   matches += 1
                     if any(h in cell for h in StatementParser._CREDIT_HDRS) and "credit" not in tmp:
                         tmp["credit"] = ci;  matches += 1
+                    if any(h in cell for h in StatementParser._AMOUNT_HDRS) and "amount" not in tmp:
+                        tmp["amount"] = ci;  matches += 0  # doesn't count toward match threshold alone
                     if any(h in cell for h in StatementParser._BALANCE_HDRS) and "balance" not in tmp:
                         tmp["balance"] = ci
                     if any(h in cell for h in StatementParser._REF_HDRS) and "ref" not in tmp:
                         tmp["ref"] = ci
-                if matches >= 2:
+                # Match threshold: at least 2 of (date, desc, debit, credit, amount)
+                has_date = "date" in tmp
+                has_amount_col = ("debit" in tmp and "credit" in tmp) or "amount" in tmp
+                if has_date and (has_amount_col or "desc" in tmp):
                     header_idx = ri
                     col_map    = tmp
                     break
@@ -741,42 +749,61 @@ class StatementParser:
                 if not row:
                     continue
                 date_cell = (str(row[col_map["date"]]).strip()
-                             if row[col_map["date"]] else "")
+                             if col_map["date"] < len(row) and row[col_map["date"]] else "")
                 dt = _parse_date(date_cell)
                 if dt is None:
                     continue
 
                 desc = ""
-                if "desc" in col_map and row[col_map["desc"]]:
+                if "desc" in col_map and col_map["desc"] < len(row) and row[col_map["desc"]]:
                     desc = str(row[col_map["desc"]]).replace('\n', ' ').strip()
                 ref = None
-                if "ref" in col_map and row[col_map["ref"]]:
+                if "ref" in col_map and col_map["ref"] < len(row) and row[col_map["ref"]]:
                     ref = str(row[col_map["ref"]]).strip()
 
-                debit_amt  = (_parse_amount(str(row[col_map["debit"]]))
-                              if "debit" in col_map
-                              and col_map["debit"] < len(row)
-                              and row[col_map["debit"]] else 0.0)
-                credit_amt = (_parse_amount(str(row[col_map["credit"]]))
-                              if "credit" in col_map
-                              and col_map["credit"] < len(row)
-                              and row[col_map["credit"]] else 0.0)
-                balance    = None
+                # Two paths: separate debit/credit columns OR single signed amount column
+                if "debit" in col_map and "credit" in col_map:
+                    # Path A: separate columns
+                    debit_amt  = (_parse_amount(str(row[col_map["debit"]]))
+                                  if col_map["debit"] < len(row) and row[col_map["debit"]] else 0.0)
+                    credit_amt = (_parse_amount(str(row[col_map["credit"]]))
+                                  if col_map["credit"] < len(row) and row[col_map["credit"]] else 0.0)
+                    amount = None
+                elif "amount" in col_map:
+                    # Path B: single signed column
+                    amount = _parse_amount(str(row[col_map["amount"]]))
+                    debit_amt = None
+                    credit_amt = None
+                else:
+                    continue
+
+                balance = None
                 if ("balance" in col_map
                         and col_map["balance"] < len(row)
                         and row[col_map["balance"]]):
                     balance = _parse_amount(str(row[col_map["balance"]]))
 
-                if debit_amt == 0 and credit_amt == 0:
-                    continue
-                if credit_amt > 0:
+                # Process Path A (separate columns)
+                if debit_amt is not None and credit_amt is not None:
+                    if debit_amt == 0 and credit_amt == 0:
+                        continue
+                    if credit_amt > 0:
+                        transactions.append(Transaction(
+                            date=dt, description=desc, amount=credit_amt,
+                            tx_type="credit", balance=balance, reference=ref))
+                    if debit_amt > 0:
+                        transactions.append(Transaction(
+                            date=dt, description=desc, amount=-debit_amt,
+                            tx_type="debit", balance=balance, reference=ref))
+
+                # Process Path B (single signed column)
+                elif amount is not None:
+                    if amount == 0:
+                        continue
                     transactions.append(Transaction(
-                        date=dt, description=desc, amount=credit_amt,
-                        tx_type="credit", balance=balance, reference=ref))
-                if debit_amt > 0:
-                    transactions.append(Transaction(
-                        date=dt, description=desc, amount=-debit_amt,
-                        tx_type="debit", balance=balance, reference=ref))
+                        date=dt, description=desc, amount=amount,
+                        tx_type="credit" if amount > 0 else "debit",
+                        balance=balance, reference=ref))
 
         if not transactions:
             transactions = StatementParser._parse_bank_text(raw_text)
@@ -837,11 +864,8 @@ class StatementParser:
         result.largest_credit = max((t.amount for t in credits), default=0)
         result.largest_debit  = max((abs(t.amount) for t in debits), default=0)
 
-        # Exclude one-off large transfers from monthly income average
-        one_off  = sum(t.amount for t in credits
-                       if t.amount >= StatementParser._ONE_OFF_THRESHOLD)
-        adjusted = result.total_credits - one_off
-
+        # Build monthly buckets (include months with zero transactions
+        # across the statement period so consistency reflects gaps)
         monthly: dict = defaultdict(lambda: {"in": 0.0, "out": 0.0, "count": 0})
         for t in txns:
             key = t.date.strftime("%b %Y")
@@ -851,6 +875,30 @@ class StatementParser:
                 monthly[key]["out"] += abs(t.amount)
             monthly[key]["count"] += 1
 
+        # Determine statement period (prefer header values, else use txns)
+        start = result.period_from or (min((t.date for t in txns), default=None))
+        end   = result.period_to   or (max((t.date for t in txns), default=None))
+
+        months_ordered = []
+        if start and end:
+            # normalize to first day of month for iteration
+            cur = datetime(start.year, start.month, 1)
+            last = datetime(end.year, end.month, 1)
+            while cur <= last:
+                months_ordered.append(cur.strftime("%b %Y"))
+                # advance month
+                if cur.month == 12:
+                    cur = datetime(cur.year + 1, 1, 1)
+                else:
+                    cur = datetime(cur.year, cur.month + 1, 1)
+        else:
+            months_ordered = sorted(monthly.keys(),
+                                    key=lambda kv: datetime.strptime(kv, "%b %Y"))
+
+        # Ensure every month in the period exists in buckets (zero-filled)
+        for m in months_ordered:
+            _ = monthly[m]  # default dict will create zero bucket if missing
+
         result.monthly_summaries = [
             MonthlySummary(
                 month=m, total_in=v["in"], total_out=v["out"],
@@ -859,25 +907,92 @@ class StatementParser:
                 monthly.items(),
                 key=lambda kv: datetime.strptime(kv[0], "%b %Y"))
         ]
+
         result.months_covered     = max(len(result.monthly_summaries), 1)
-        result.avg_monthly_income  = adjusted / result.months_covered
-        result.avg_monthly_expense = result.total_debits / result.months_covered
+
+        # Use robust outlier detection (IQR) to identify one-off large credits
+        incomes = [m.total_in for m in result.monthly_summaries]
+        def _median(xs):
+            s = sorted(xs)
+            n = len(s)
+            if n == 0:
+                return 0.0
+            mid = n // 2
+            return (s[mid] if n % 2 == 1 else (s[mid - 1] + s[mid]) / 2)
+
+        adjusted_total_credits = result.total_credits
+        if incomes:
+            s = sorted(incomes)
+            q1 = _median(s[:len(s)//2])
+            q3 = _median(s[(len(s)+1)//2:])
+            iqr = max(0.0, q3 - q1)
+            upper = q3 + 1.5 * iqr
+            # treat months with total_in > upper as one-off spikes
+            one_off_sum = sum(i for i in incomes if i > upper)
+            adjusted_total_credits = max(0.0, result.total_credits - one_off_sum)
+
+        result.avg_monthly_income  = (adjusted_total_credits / result.months_covered
+                                      if result.months_covered else 0.0)
+        result.avg_monthly_expense = (result.total_debits / result.months_covered
+                                      if result.months_covered else 0.0)
         result.avg_monthly_net     = (result.avg_monthly_income
                                       - result.avg_monthly_expense)
 
-        incomes = [m.total_in for m in result.monthly_summaries]
-        if len(incomes) >= 2:
-            avg = sum(incomes) / len(incomes)
-            if avg > 0:
-                devs = [abs(i - avg) / avg for i in incomes]
-                result.income_consistency = max(
-                    0.0, 1.0 - sum(devs) / len(devs))
+        # Income consistency: proportion of months within ±50% of median income
+        if incomes and len(incomes) >= 2:
+            med = _median([i for i in incomes])
+            if med == 0:
+                # If all months have zero income, consistency = 0 (no income data).
+                nonzero = sum(1 for i in incomes if i > 0)
+                if nonzero == 0:
+                    result.income_consistency = 0.0
+                else:
+                    # Fraction of months with any income (sparse earnings → low consistency)
+                    result.income_consistency = nonzero / len(incomes)
+            else:
+                in_band = sum(1 for i in incomes if 0.5 * med <= i <= 1.5 * med)
+                result.income_consistency = in_band / len(incomes)
         else:
             result.income_consistency = 0.5
 
+        # Detect salary-like recurring credits: same day (+-3 days) and similar amount
+        credit_tx_by_month = defaultdict(list)
+        for t in credits:
+            credit_tx_by_month[t.date.strftime("%b %Y")].append(t)
+
+        # collect representative day and amount per month (largest credit)
+        rep_days = []
+        rep_amounts = []
+        for ms in result.monthly_summaries:
+            m = ms.month
+            txs = credit_tx_by_month.get(m, [])
+            if not txs:
+                continue
+            # choose largest credit as representative
+            best = max(txs, key=lambda x: x.amount)
+            rep_days.append(best.date.day)
+            rep_amounts.append(best.amount)
+
+        result.has_salary_pattern = False
+        if len(rep_days) >= 3:
+            # check day clustering within +-3 days
+            median_day = int(_median(rep_days))
+            day_match = sum(1 for d in rep_days if abs(d - median_day) <= 3)
+            med_amt = _median(rep_amounts)
+            amt_match = sum(1 for a in rep_amounts if med_amt * 0.7 <= a <= med_amt * 1.3)
+            if day_match >= max(3, int(0.75 * len(rep_days))) and amt_match >= max(3, int(0.75 * len(rep_amounts))):
+                result.has_salary_pattern = True
+
         sal_kw = ["salary", "payroll", "wage", "pay ", "employer", "net pay"]
-        result.has_salary_pattern   = any(k in raw_text.lower() for k in sal_kw)
+        # also mark if explicit salary keywords appear
+        if any(k in raw_text.lower() for k in sal_kw):
+            result.has_salary_pattern = True
+
         result.has_irregular_income = result.income_consistency < 0.5
+
+        # Expose net monthly flow for downstream engines (loan ceiling, scorer)
+        # net_monthly_flow = avg monthly income - avg monthly expense
+        result.net_monthly_flow = result.avg_monthly_net
 
 
 # ══════════════════════════════════════════════════════════════════════════════
