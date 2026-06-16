@@ -9,6 +9,12 @@ New in this version:
   - Results are injected into the chat as a message automatically
   - Falls back to local answers if no Groq key is set
   - Input box anchored above taskbar (fixed height row)
+
+Password fixes (v2):
+  - Password entry now actually visible and correctly sized in attachment bar
+  - Placeholder updated to "Last 4 digits of loan number (if encrypted)"
+  - Retry flow: if wrong password, bar stays open with red error prompt
+  - Password field hidden for unencrypted PDFs and images
 """
 
 import os
@@ -32,6 +38,32 @@ SUGGESTED_QUERIES = [
 ]
 
 
+def _pdf_is_encrypted(path: str) -> bool:
+    """
+    Returns True if the PDF at *path* is password-protected.
+    Uses pdfplumber first, falls back to pypdf.
+    Returns False for images and non-PDF files (they never need a password).
+    """
+    ext = os.path.splitext(path)[1].lower()
+    if ext not in (".pdf",):
+        return False
+    try:
+        import pdfplumber
+        with pdfplumber.open(path) as pdf:
+            # pdfplumber raises an exception on encrypted PDFs when no password
+            # is given, so reaching this line means it opened fine → not encrypted.
+            _ = pdf.pages
+        return False
+    except Exception:
+        pass
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(path)
+        return reader.is_encrypted
+    except Exception:
+        return False
+
+
 class ChatbotScreen(ctk.CTkFrame):
     def __init__(self, master, **kwargs):
         super().__init__(master, fg_color=COLORS["bg_primary"], **kwargs)
@@ -40,6 +72,7 @@ class ChatbotScreen(ctk.CTkFrame):
         self.conversation_history = []
         self._attached_statement  = None   # path of uploaded statement
         self._statement_result    = None   # parsed StatementResult
+        self._file_is_encrypted   = False  # track whether current file needs PW
         self._build()
         self._check_api_status()
         self._add_message(
@@ -135,16 +168,20 @@ class ChatbotScreen(ctk.CTkFrame):
         self.messages_frame.grid(row=1, column=0, sticky="nsew", pady=(0, 6))
         self.messages_frame.columnconfigure(0, weight=1)
 
-        # ── Attachment indicator bar (hidden until file attached) ──────────
+        # ── Attachment bar ─────────────────────────────────────────────────
+        # FIX 1: Correct column weights so all widgets actually render.
+        # FIX 2: Placeholder text updated to give clear instructions.
+        # FIX 4: Password row is shown/hidden based on encryption detection.
         self.attachment_bar = ctk.CTkFrame(
             chat_outer,
             fg_color=COLORS["bg_input"],
             corner_radius=8,
-            height=36,
         )
-        # Not gridded yet — shown when file is attached
-        self.attachment_bar.columnconfigure(0, weight=1)
-        self.attachment_bar.columnconfigure(1, weight=1)
+        # Not gridded yet — shown when a file is attached via _show_attachment_bar()
+        # Row 0: filename + remove button
+        # Row 1: password entry (only shown when file is encrypted)
+        self.attachment_bar.columnconfigure(0, weight=1)   # filename label stretches
+        self.attachment_bar.columnconfigure(1, weight=0)   # remove button fixed
 
         self.attachment_label = ctk.CTkLabel(
             self.attachment_bar,
@@ -153,23 +190,8 @@ class ChatbotScreen(ctk.CTkFrame):
             text_color=COLORS["accent_green_dark"],
             anchor="w",
         )
-        self.attachment_label.grid(row=0, column=0, padx=12, sticky="w")
-
-        self.statement_password_var = ctk.StringVar()
-        self.attachment_password_entry = ctk.CTkEntry(
-            self.attachment_bar,
-            textvariable=self.statement_password_var,
-            placeholder_text="Password for encrypted PDF",
-            show="•",
-            fg_color=COLORS["bg_card"],
-            border_color=COLORS["border"],
-            text_color=COLORS["text_primary"],
-            font=FONTS["body_small"],
-            corner_radius=8,
-            height=30,
-            border_width=1,
-        )
-        self.attachment_password_entry.grid(row=0, column=1, padx=(8, 8), sticky="ew")
+        self.attachment_label.grid(row=0, column=0, padx=(12, 4),
+                                   pady=(6, 2), sticky="ew")
 
         ctk.CTkButton(
             self.attachment_bar,
@@ -181,7 +203,48 @@ class ChatbotScreen(ctk.CTkFrame):
             text_color=COLORS["danger"],
             corner_radius=6,
             command=self._remove_attachment,
-        ).grid(row=0, column=2, padx=8)
+        ).grid(row=0, column=1, padx=8, pady=(6, 2))
+
+        # Password row — spans both columns; hidden/shown per _show_password_row()
+        self._pw_row = ctk.CTkFrame(
+            self.attachment_bar, fg_color="transparent")
+        self._pw_row.columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            self._pw_row,
+            text="🔒 Password:",
+            font=FONTS["body_small"],
+            text_color=COLORS["text_secondary"],
+            anchor="w",
+        ).grid(row=0, column=0, padx=(12, 6), pady=(0, 6))
+
+        self.statement_password_var = ctk.StringVar()
+        self.attachment_password_entry = ctk.CTkEntry(
+            self._pw_row,
+            textvariable=self.statement_password_var,
+            # FIX 2: Clear instruction matching the business rule
+            placeholder_text="Last 4 digits of loan number (if encrypted)",
+            show="•",
+            fg_color=COLORS["bg_card"],
+            border_color=COLORS["border"],
+            text_color=COLORS["text_primary"],
+            font=FONTS["body_small"],
+            corner_radius=8,
+            height=32,
+            border_width=1,
+        )
+        self.attachment_password_entry.grid(
+            row=0, column=1, padx=(0, 12), pady=(0, 6), sticky="ew")
+
+        # Error label shown on wrong password (FIX 3)
+        self._pw_error_label = ctk.CTkLabel(
+            self.attachment_bar,
+            text="",
+            font=FONTS["caption"],
+            text_color=COLORS["danger"],
+            anchor="w",
+        )
+        # Not gridded until needed
 
         # ── Input row — fixed height, never behind taskbar ─────────────────
         input_frame = ctk.CTkFrame(
@@ -306,10 +369,62 @@ class ChatbotScreen(ctk.CTkFrame):
             justify="center",
         ).pack(pady=(0, 12))
 
+    # ── Attachment bar helpers ─────────────────────────────────────────────────
+
+    def _show_attachment_bar(self, filename: str, encrypted: bool):
+        """
+        Grid the attachment bar into row 2 of chat_outer.
+        Shows the password row only when *encrypted* is True (FIX 4).
+        Clears any previous error label.
+        """
+        self.attachment_label.configure(
+            text=f"📎  {filename}  — click Send to analyse")
+
+        # Show/hide password row based on encryption state
+        if encrypted:
+            self._pw_row.grid(row=1, column=0, columnspan=2, sticky="ew")
+            self.attachment_password_entry.focus()
+        else:
+            self._pw_row.grid_forget()
+            self.statement_password_var.set("")
+
+        # Clear any old error
+        self._pw_error_label.grid_forget()
+        self._pw_error_label.configure(text="")
+
+        self.attachment_bar.grid(row=2, column=0, sticky="ew",
+                                 pady=(0, 4),
+                                 in_=self.attachment_bar.master)
+
+    def _show_password_error(self, message: str):
+        """
+        FIX 3: Show a red error message inside the attachment bar and
+        re-enable the Send button so the user can retry with the correct password.
+        The password field is highlighted red.
+        """
+        self._pw_error_label.configure(text=f"⚠  {message}")
+        self._pw_error_label.grid(row=2, column=0, columnspan=2,
+                                  padx=12, pady=(0, 6), sticky="ew")
+
+        # Highlight the password entry border red to draw attention
+        self.attachment_password_entry.configure(
+            border_color=COLORS["danger"])
+
+        # Re-enable send so the user can retry
+        self.send_btn.configure(state="normal", text="Send")
+        self.attachment_password_entry.focus()
+
+    def _clear_password_error(self):
+        """Remove error styling before a retry attempt."""
+        self._pw_error_label.grid_forget()
+        self._pw_error_label.configure(text="")
+        self.attachment_password_entry.configure(
+            border_color=COLORS["border"])
+
     # ── Statement attachment ───────────────────────────────────────────────────
 
     def _attach_statement(self):
-        """Open file picker and attach a statement PDF or image."""
+        """Open file picker, detect encryption, show attachment bar."""
         from app.ui.components.save_dialog import OpenDialog
 
         filetypes = [
@@ -320,7 +435,7 @@ class ChatbotScreen(ctk.CTkFrame):
         ]
 
         dialog = OpenDialog(self.master, title="Select Bank or MoMo Statement",
-                           filetypes=filetypes)
+                            filetypes=filetypes)
         self.master.wait_window(dialog)
 
         path = dialog.result
@@ -330,27 +445,28 @@ class ChatbotScreen(ctk.CTkFrame):
         self._attached_statement = path
         filename = os.path.basename(path)
 
-        # Show attachment bar
-        self.attachment_label.configure(
-            text=f"📎  {filename}  — click Send to analyse")
-        self.attachment_bar.grid(row=2, column=0, sticky="ew", pady=(0, 4))
+        # FIX 4: Detect encryption and only show password row when needed
+        self._file_is_encrypted = _pdf_is_encrypted(path)
+        self._show_attachment_bar(filename, self._file_is_encrypted)
 
         # Change attach button to green to confirm
         self.attach_btn.configure(
-            text="📎",
             fg_color=COLORS["accent_green"],
             text_color="#FFFFFF",
         )
 
-        # Auto-fill the input with the analysis request
         self.input_var.set(
-            f"Analyse this statement and tell me how much this borrower can borrow.")
+            "Analyse this statement and tell me how much this borrower can borrow.")
         self.input_entry.focus()
 
     def _remove_attachment(self):
-        """Remove the attached statement."""
-        self._attached_statement = None
-        self._statement_result   = None
+        """Remove the attached statement and reset the bar."""
+        self._attached_statement  = None
+        self._statement_result    = None
+        self._file_is_encrypted   = False
+        self.statement_password_var.set("")
+        self._pw_error_label.configure(text="")
+        self._pw_error_label.grid_forget()
         self.attachment_bar.grid_forget()
         self.attach_btn.configure(
             fg_color=COLORS["bg_input"],
@@ -363,13 +479,27 @@ class ChatbotScreen(ctk.CTkFrame):
         try:
             self.after(0, lambda: self._add_system_note(
                 f"Analysing statement: {os.path.basename(path)}..."))
- 
+
             from app.core.agents.statement_parser import StatementParser
-            pw = self.statement_password_var.get().strip() if hasattr(self, "statement_password_var") else None
+            pw = self.statement_password_var.get().strip()
             result = StatementParser.parse(path, password=pw if pw else None)
             self._statement_result = result
- 
-            if result.statement_type == "unknown":
+
+            # ── FIX 3: Detect wrong-password error and trigger retry flow ──
+            if result.statement_type == "unknown" or not result.transactions:
+                warning_text = "; ".join(result.parse_warnings).lower()
+                is_pw_error  = any(kw in warning_text for kw in [
+                    "password", "encrypted", "decrypt", "incorrect"])
+                is_no_text   = "no text extracted" in warning_text
+
+                if (is_pw_error or is_no_text) and self._file_is_encrypted:
+                    # Wrong or missing password — keep bar open, show error
+                    self.after(0, lambda: self._show_password_error(
+                        "Wrong password. Enter the last 4 digits of the loan number and try again."
+                    ))
+                    return  # send_btn already re-enabled inside _show_password_error
+
+                # Unreadable for a different reason — normal error message
                 error_msg = "; ".join(result.parse_warnings)
                 self.after(0, lambda: self._add_message(
                     "assistant",
@@ -377,29 +507,29 @@ class ChatbotScreen(ctk.CTkFrame):
                     "Please make sure the file is a readable PDF or clear image."
                 ))
                 return
- 
-            # ── Render card ───────────────────────────────────────────────────
+
+            # ── Clear any previous password error styling on success ───────
+            self.after(0, self._clear_password_error)
+
+            # ── Render statement result card ───────────────────────────────
             from app.core.agents.loan_ceiling_engine import LoanCeilingEngine
             ceiling = LoanCeilingEngine.calculate(statement_result=result)
- 
+
             def show_card():
                 from app.ui.components.statement_result_card import StatementResultCard
                 card = StatementResultCard(
-                    parent     = self.messages_frame,
-                    result     = result,
-                    ceiling    = ceiling,
-                    on_accept  = self._on_accept_scenario,
+                    parent    = self.messages_frame,
+                    result    = result,
+                    ceiling   = ceiling,
+                    on_accept = self._on_accept_scenario,
                 )
                 card.pack(fill="x", padx=12, pady=6)
                 self._scroll_to_bottom()
- 
+
             self.after(0, show_card)
- 
-            # ── KEY FIX: inject statement context as a system message ─────────
-            # This makes the full statement analysis available to EVERY
-            # follow-up question in this conversation — the AI will never
-            # say "no statement provided" again.
-            ceiling_text = ceiling.as_text() if ceiling else "N/A"
+
+            # ── Inject statement context into conversation history ──────────
+            ceiling_text      = ceiling.as_text() if ceiling else "N/A"
             statement_context = (
                 f"[STATEMENT CONTEXT — available for all follow-up questions]\n"
                 f"A financial statement has been uploaded and analysed.\n\n"
@@ -407,10 +537,7 @@ class ChatbotScreen(ctk.CTkFrame):
                 f"LOAN CEILING SCENARIOS:\n{ceiling_text}\n"
                 f"[END STATEMENT CONTEXT]"
             )
- 
-            # Insert as a system-style message at position 0 of history
-            # (before any user messages) so it acts as persistent background knowledge.
-            # If a previous statement context exists, replace it.
+
             self.conversation_history = [
                 msg for msg in self.conversation_history
                 if not (msg["role"] == "system"
@@ -420,9 +547,8 @@ class ChatbotScreen(ctk.CTkFrame):
                 "role":    "system",
                 "content": statement_context,
             })
-            # ── END KEY FIX ───────────────────────────────────────────────────
- 
-            # Send first response — history already includes statement context
+
+            # ── Get AI response ────────────────────────────────────────────
             from app.core.agents.ai_core import AICore
             response = AICore.chat(
                 message=message,
@@ -432,7 +558,7 @@ class ChatbotScreen(ctk.CTkFrame):
                 {"role": "assistant", "content": response})
             self.after(0, lambda: self._add_message("assistant", response))
             self.after(0, self._remove_attachment)
- 
+
         except Exception as e:
             self.after(0, lambda: self._add_message(
                 "assistant",
@@ -441,8 +567,7 @@ class ChatbotScreen(ctk.CTkFrame):
         finally:
             self.after(0, lambda: self.send_btn.configure(
                 state="normal", text="Send"))
- 
- 
+
     def _on_accept_scenario(self, scenario_name: str,
                              principal: float, months: int):
         """
@@ -452,14 +577,14 @@ class ChatbotScreen(ctk.CTkFrame):
         result = self._statement_result
         client = result.client_name if result else ""
         nin    = result.nin         if result else ""
- 
+
         self._add_message(
             "assistant",
             f"Scenario accepted: {scenario_name.title()} — "
             f"UGX {int(principal):,} over {months} months.\n\n"
             f"Opening the loan form now..."
         )
- 
+
         if hasattr(self.master, "pre_fill_loan"):
             self.master.pre_fill_loan(
                 principal   = principal,
@@ -468,7 +593,7 @@ class ChatbotScreen(ctk.CTkFrame):
                 nin         = nin,
             )
             self.master.show_screen("loans")
- 
+
     def _clear_statement_context(self):
         """Remove the injected statement system message from history."""
         self.conversation_history = [
@@ -502,7 +627,6 @@ class ChatbotScreen(ctk.CTkFrame):
         bubble = ctk.CTkFrame(wrapper, fg_color=bubble_color, corner_radius=10)
         bubble.pack(anchor=align, pady=(2, 0), fill="x")
 
-        # Use a read-only textbox so users can select and copy message text.
         txt = ctk.CTkTextbox(
             bubble,
             width=1,
@@ -571,12 +695,14 @@ class ChatbotScreen(ctk.CTkFrame):
         if not message:
             return
 
+        # FIX 3: Clear password error styling on each new send attempt
+        self._clear_password_error()
+
         self._add_message("user", message)
         self.input_var.set("")
         self.send_btn.configure(state="disabled", text="...")
         self.conversation_history.append({"role": "user", "content": message})
 
-        # If a statement is attached, parse it first then respond
         if self._attached_statement:
             threading.Thread(
                 target=self._parse_statement_and_respond,

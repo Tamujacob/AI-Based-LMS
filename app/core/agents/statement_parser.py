@@ -10,6 +10,8 @@ Supports: MTN MoMo · Airtel Money · Stanbic · Equity ·
 NEW in this version:
   - result.client_name  — full name extracted from statement header
   - result.nin          — Uganda NIN (14 chars) extracted from PDF text
+  - StatementParser.is_encrypted(path) — public helper used by the UI
+    to decide whether to show the password field before parsing begins
 
 Uganda NIN format (14 chars, no spaces or punctuation):
   C[MF]  — Citizen + Male/Female
@@ -91,7 +93,7 @@ class StatementResult:
     statement_type:       str   # mtn_momo|airtel|stanbic|equity|
                                 # centenary|dfcu|bank|unknown
 
-    # ── Client identity (NEW) ─────────────────────────────────────────────
+    # ── Client identity ───────────────────────────────────────────────────
     client_name:          str   = ""   # Full name from header
     nin:                  str   = ""   # Uganda NIN, 14 chars, or ""
     # ─────────────────────────────────────────────────────────────────────
@@ -157,6 +159,48 @@ class StatementResult:
 
 class StatementParser:
 
+    # ── Public encryption check (used by the UI before parsing) ─────────────
+
+    @staticmethod
+    def is_encrypted(file_path: str) -> bool:
+        """
+        Returns True if *file_path* is a password-protected PDF.
+
+        Called by the chatbot screen immediately after the user picks a file
+        so the UI can decide whether to show the password field — without
+        waiting until parse() is called.
+
+        Returns False for:
+          - Image files (never encrypted via PDF password)
+          - Non-existent files
+          - Unencrypted PDFs
+          - Any file that is not a PDF
+        """
+        if not os.path.exists(file_path):
+            return False
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext not in (".pdf",):
+            return False
+
+        # Try pdfplumber first — if it opens without exception, not encrypted
+        try:
+            import pdfplumber
+            with pdfplumber.open(file_path) as pdf:
+                _ = pdf.pages   # force load; raises on encrypted PDF
+            return False
+        except Exception:
+            pass
+
+        # Fallback to pypdf for a definitive answer
+        try:
+            from pypdf import PdfReader
+            reader = PdfReader(file_path)
+            return reader.is_encrypted
+        except Exception:
+            # If we can't open it at all, treat as encrypted so the user
+            # is given the chance to provide a password.
+            return True
+
     # ── Entry point ──────────────────────────────────────────────────────────
 
     @staticmethod
@@ -165,10 +209,12 @@ class StatementParser:
         Parse any Uganda bank / mobile money statement PDF or image.
         Auto-detects institution and extracts client_name, nin, and
         full transaction + monthly summary data.
-        
+
         Args:
             file_path: Path to the statement file (PDF, image, etc.)
-            password: Password for encrypted PDFs (e.g., last 4 account digits)
+            password: Password for encrypted PDFs.
+                      For Ugandan bank statements this is typically the
+                      last 4 digits of the account/loan number.
         """
         if not os.path.exists(file_path):
             r = StatementResult(source_file=file_path, statement_type="unknown")
@@ -188,16 +234,23 @@ class StatementParser:
 
         if not raw_text.strip():
             r = StatementResult(source_file=file_path, statement_type="unknown")
-            if password:
-                r.parse_warnings.append(
-                    "No text extracted. The provided password may be incorrect, "
-                    "or the PDF uses unsupported encryption."
-                )
+            if StatementParser.is_encrypted(file_path):
+                if password:
+                    # Had a password but still no text → wrong password
+                    r.parse_warnings.append(
+                        "No text extracted. The provided password is incorrect. "
+                        "Please enter the last 4 digits of the loan number."
+                    )
+                else:
+                    # Encrypted but no password given
+                    r.parse_warnings.append(
+                        "No text extracted. This PDF is password-protected. "
+                        "Enter the last 4 digits of the loan number as the password."
+                    )
             else:
                 r.parse_warnings.append(
                     "No text extracted. Ensure pdfplumber is installed and "
-                    "the PDF is not password-protected. If password-protected, "
-                    "provide the password (last 4 account digits)."
+                    "the PDF is not corrupted."
                 )
             return r
 
@@ -240,7 +293,7 @@ class StatementParser:
         return result
 
     # ══════════════════════════════════════════════════════════════════════════
-    # NIN extraction  (NEW)
+    # NIN extraction
     # ══════════════════════════════════════════════════════════════════════════
 
     @staticmethod
@@ -293,7 +346,7 @@ class StatementParser:
         # If nothing found, result.nin stays "" — this is expected for MoMo
 
     # ══════════════════════════════════════════════════════════════════════════
-    # Client name extraction  (NEW)
+    # Client name extraction
     # ══════════════════════════════════════════════════════════════════════════
 
     @staticmethod
@@ -321,7 +374,6 @@ class StatementParser:
             r'(?<!\w)name\s*[:\-]\s*([A-Z][A-Za-z\s\'\-\.]{2,50})',
         ]
 
-        # Words that signal the name capture has gone too far
         _STOP_WORDS = re.compile(
             r'\s+(?:wallet|account|phone|mobile|from|to|date|number|'
             r'period|statement|nin|national|balance|branch)',
@@ -334,7 +386,6 @@ class StatementParser:
                 raw   = m.group(1).strip()
                 raw   = _STOP_WORDS.split(raw)[0].strip()
                 words = raw.split()
-                # Valid name: at least 2 words, no digits, reasonable length
                 if len(words) >= 2 and not re.search(r'\d', raw) and len(raw) > 4:
                     result.client_name    = raw.upper()
                     result.account_holder = result.account_holder or raw.upper()
@@ -502,14 +553,6 @@ class StatementParser:
     # ══════════════════════════════════════════════════════════════════════════
     # MTN MoMo parser
     # ══════════════════════════════════════════════════════════════════════════
-    # Root cause of original failure:
-    #   pdfplumber collapses multi-line table cells → row[0] contains ALL data,
-    #   row[1..N] = None.  Old parser only read row[4] → missed ~50% of rows.
-    #
-    # FORMAT A — clean row:  row[0]="26 Apr 2026 13:21", row[4]="-15000.00"
-    # FORMAT B — collapsed:  row[0]="...26 Apr 2026 07:43 PAKAPAKA -400.00..."
-    #                         row[1..] = all None
-    # ══════════════════════════════════════════════════════════════════════════
 
     _MTN_DATE_RE   = re.compile(r'(\d{1,2}\s+\w{3}\s+\d{4}\s+\d{2}:\d{2})')
     _MTN_AMOUNT_RE = re.compile(r'([+\-][\d,]+(?:\.\d+)?)')
@@ -529,7 +572,6 @@ class StatementParser:
                 if "Date" in cell0 and ("Time" in cell0 or "Payment" in cell0):
                     continue
 
-                # FORMAT A — signed amount in col 4 (fallback to 3 or 5)
                 amt_col = None
                 for ci in [4, 3, 5]:
                     if (len(row) > ci and row[ci] is not None
@@ -564,7 +606,6 @@ class StatementParser:
                         reference=ref or None))
                     continue
 
-                # FORMAT B — all columns after cell0 are None
                 if all(c is None for c in (row[1:] if len(row) > 1 else [])):
                     dm = StatementParser._MTN_DATE_RE.search(cell0)
                     if not dm:
@@ -598,13 +639,6 @@ class StatementParser:
 
     # ══════════════════════════════════════════════════════════════════════════
     # Airtel Money parser
-    # ══════════════════════════════════════════════════════════════════════════
-    # New format (2022+): table
-    #   Date|Trans ID|Tx Type|Description|From|To|Status|Amount|Fee|Balance
-    #   Amount uses +/- prefix. Date: YYYY-MM-DD.
-    #
-    # Old format: text lines
-    #   "16:23 PM (CO240409.1623.H54784) 10/04/24 Money Sent to X -- 2.63"
     # ══════════════════════════════════════════════════════════════════════════
 
     _AIRTEL_CREDIT = {"withdraw money", "money received", "receive money",
@@ -656,7 +690,6 @@ class StatementParser:
                     balance=bal,
                     reference=str(row[1]).strip() if row[1] else None))
 
-        # Old text-format fallback
         if not transactions:
             line_re = re.compile(
                 r'(?:[\d:]+\s*(?:AM|PM)\s*)?(?:\(([A-Z0-9.]+)\)\s*)?'
@@ -686,10 +719,6 @@ class StatementParser:
     # ══════════════════════════════════════════════════════════════════════════
     # Bank parser — Stanbic, Equity, Centenary, DFCU, generic
     # ══════════════════════════════════════════════════════════════════════════
-    # All Ugandan banks use separate Debit + Credit columns.
-    # Column positions are auto-detected from header row keywords.
-    # Falls back to text-regex if no table structure is found.
-    # ══════════════════════════════════════════════════════════════════════════
 
     _DATE_HDRS    = {"date", "txn date", "tran date", "trans date",
                      "value date", "posting date", "transaction date", "posting"}
@@ -703,7 +732,7 @@ class StatementParser:
                      "amount cr", "credit amount"}
     _BALANCE_HDRS = {"balance", "running balance", "closing balance",
                      "available balance", "account balance"}
-    _AMOUNT_HDRS  = {"amount", "transaction amount", "amt"}  # single signed column
+    _AMOUNT_HDRS  = {"amount", "transaction amount", "amt"}
 
     @staticmethod
     def _parse_bank_debit_credit(file_path, raw_text, tables):
@@ -729,12 +758,11 @@ class StatementParser:
                     if any(h in cell for h in StatementParser._CREDIT_HDRS) and "credit" not in tmp:
                         tmp["credit"] = ci;  matches += 1
                     if any(h in cell for h in StatementParser._AMOUNT_HDRS) and "amount" not in tmp:
-                        tmp["amount"] = ci;  matches += 0  # doesn't count toward match threshold alone
+                        tmp["amount"] = ci
                     if any(h in cell for h in StatementParser._BALANCE_HDRS) and "balance" not in tmp:
                         tmp["balance"] = ci
                     if any(h in cell for h in StatementParser._REF_HDRS) and "ref" not in tmp:
                         tmp["ref"] = ci
-                # Match threshold: at least 2 of (date, desc, debit, credit, amount)
                 has_date = "date" in tmp
                 has_amount_col = ("debit" in tmp and "credit" in tmp) or "amount" in tmp
                 if has_date and (has_amount_col or "desc" in tmp):
@@ -761,16 +789,13 @@ class StatementParser:
                 if "ref" in col_map and col_map["ref"] < len(row) and row[col_map["ref"]]:
                     ref = str(row[col_map["ref"]]).strip()
 
-                # Two paths: separate debit/credit columns OR single signed amount column
                 if "debit" in col_map and "credit" in col_map:
-                    # Path A: separate columns
                     debit_amt  = (_parse_amount(str(row[col_map["debit"]]))
                                   if col_map["debit"] < len(row) and row[col_map["debit"]] else 0.0)
                     credit_amt = (_parse_amount(str(row[col_map["credit"]]))
                                   if col_map["credit"] < len(row) and row[col_map["credit"]] else 0.0)
                     amount = None
                 elif "amount" in col_map:
-                    # Path B: single signed column
                     amount = _parse_amount(str(row[col_map["amount"]]))
                     debit_amt = None
                     credit_amt = None
@@ -783,7 +808,6 @@ class StatementParser:
                         and row[col_map["balance"]]):
                     balance = _parse_amount(str(row[col_map["balance"]]))
 
-                # Process Path A (separate columns)
                 if debit_amt is not None and credit_amt is not None:
                     if debit_amt == 0 and credit_amt == 0:
                         continue
@@ -795,8 +819,6 @@ class StatementParser:
                         transactions.append(Transaction(
                             date=dt, description=desc, amount=-debit_amt,
                             tx_type="debit", balance=balance, reference=ref))
-
-                # Process Path B (single signed column)
                 elif amount is not None:
                     if amount == 0:
                         continue
@@ -850,7 +872,7 @@ class StatementParser:
     # Summary builder — shared by all parsers
     # ══════════════════════════════════════════════════════════════════════════
 
-    _ONE_OFF_THRESHOLD = 500_000  # UGX — bank-to-wallet top-ups excluded
+    _ONE_OFF_THRESHOLD = 500_000  # UGX
 
     @staticmethod
     def _build_summary(result: StatementResult, raw_text: str):
@@ -864,8 +886,6 @@ class StatementParser:
         result.largest_credit = max((t.amount for t in credits), default=0)
         result.largest_debit  = max((abs(t.amount) for t in debits), default=0)
 
-        # Build monthly buckets (include months with zero transactions
-        # across the statement period so consistency reflects gaps)
         monthly: dict = defaultdict(lambda: {"in": 0.0, "out": 0.0, "count": 0})
         for t in txns:
             key = t.date.strftime("%b %Y")
@@ -875,18 +895,15 @@ class StatementParser:
                 monthly[key]["out"] += abs(t.amount)
             monthly[key]["count"] += 1
 
-        # Determine statement period (prefer header values, else use txns)
         start = result.period_from or (min((t.date for t in txns), default=None))
         end   = result.period_to   or (max((t.date for t in txns), default=None))
 
         months_ordered = []
         if start and end:
-            # normalize to first day of month for iteration
-            cur = datetime(start.year, start.month, 1)
-            last = datetime(end.year, end.month, 1)
+            cur  = datetime(start.year, start.month, 1)
+            last = datetime(end.year,   end.month,   1)
             while cur <= last:
                 months_ordered.append(cur.strftime("%b %Y"))
-                # advance month
                 if cur.month == 12:
                     cur = datetime(cur.year + 1, 1, 1)
                 else:
@@ -895,9 +912,8 @@ class StatementParser:
             months_ordered = sorted(monthly.keys(),
                                     key=lambda kv: datetime.strptime(kv, "%b %Y"))
 
-        # Ensure every month in the period exists in buckets (zero-filled)
         for m in months_ordered:
-            _ = monthly[m]  # default dict will create zero bucket if missing
+            _ = monthly[m]
 
         result.monthly_summaries = [
             MonthlySummary(
@@ -908,10 +924,10 @@ class StatementParser:
                 key=lambda kv: datetime.strptime(kv[0], "%b %Y"))
         ]
 
-        result.months_covered     = max(len(result.monthly_summaries), 1)
+        result.months_covered = max(len(result.monthly_summaries), 1)
 
-        # Use robust outlier detection (IQR) to identify one-off large credits
         incomes = [m.total_in for m in result.monthly_summaries]
+
         def _median(xs):
             s = sorted(xs)
             n = len(s)
@@ -922,12 +938,11 @@ class StatementParser:
 
         adjusted_total_credits = result.total_credits
         if incomes:
-            s = sorted(incomes)
+            s  = sorted(incomes)
             q1 = _median(s[:len(s)//2])
             q3 = _median(s[(len(s)+1)//2:])
-            iqr = max(0.0, q3 - q1)
+            iqr   = max(0.0, q3 - q1)
             upper = q3 + 1.5 * iqr
-            # treat months with total_in > upper as one-off spikes
             one_off_sum = sum(i for i in incomes if i > upper)
             adjusted_total_credits = max(0.0, result.total_credits - one_off_sum)
 
@@ -938,61 +953,48 @@ class StatementParser:
         result.avg_monthly_net     = (result.avg_monthly_income
                                       - result.avg_monthly_expense)
 
-        # Income consistency: proportion of months within ±50% of median income
         if incomes and len(incomes) >= 2:
             med = _median([i for i in incomes])
             if med == 0:
-                # If all months have zero income, consistency = 0 (no income data).
                 nonzero = sum(1 for i in incomes if i > 0)
-                if nonzero == 0:
-                    result.income_consistency = 0.0
-                else:
-                    # Fraction of months with any income (sparse earnings → low consistency)
-                    result.income_consistency = nonzero / len(incomes)
+                result.income_consistency = (0.0 if nonzero == 0
+                                             else nonzero / len(incomes))
             else:
                 in_band = sum(1 for i in incomes if 0.5 * med <= i <= 1.5 * med)
                 result.income_consistency = in_band / len(incomes)
         else:
             result.income_consistency = 0.5
 
-        # Detect salary-like recurring credits: same day (+-3 days) and similar amount
         credit_tx_by_month = defaultdict(list)
         for t in credits:
             credit_tx_by_month[t.date.strftime("%b %Y")].append(t)
 
-        # collect representative day and amount per month (largest credit)
-        rep_days = []
-        rep_amounts = []
+        rep_days, rep_amounts = [], []
         for ms in result.monthly_summaries:
-            m = ms.month
-            txs = credit_tx_by_month.get(m, [])
+            txs = credit_tx_by_month.get(ms.month, [])
             if not txs:
                 continue
-            # choose largest credit as representative
             best = max(txs, key=lambda x: x.amount)
             rep_days.append(best.date.day)
             rep_amounts.append(best.amount)
 
         result.has_salary_pattern = False
         if len(rep_days) >= 3:
-            # check day clustering within +-3 days
             median_day = int(_median(rep_days))
-            day_match = sum(1 for d in rep_days if abs(d - median_day) <= 3)
-            med_amt = _median(rep_amounts)
-            amt_match = sum(1 for a in rep_amounts if med_amt * 0.7 <= a <= med_amt * 1.3)
-            if day_match >= max(3, int(0.75 * len(rep_days))) and amt_match >= max(3, int(0.75 * len(rep_amounts))):
+            day_match  = sum(1 for d in rep_days if abs(d - median_day) <= 3)
+            med_amt    = _median(rep_amounts)
+            amt_match  = sum(1 for a in rep_amounts
+                             if med_amt * 0.7 <= a <= med_amt * 1.3)
+            if (day_match  >= max(3, int(0.75 * len(rep_days)))
+                    and amt_match >= max(3, int(0.75 * len(rep_amounts)))):
                 result.has_salary_pattern = True
 
         sal_kw = ["salary", "payroll", "wage", "pay ", "employer", "net pay"]
-        # also mark if explicit salary keywords appear
         if any(k in raw_text.lower() for k in sal_kw):
             result.has_salary_pattern = True
 
         result.has_irregular_income = result.income_consistency < 0.5
-
-        # Expose net monthly flow for downstream engines (loan ceiling, scorer)
-        # net_monthly_flow = avg monthly income - avg monthly expense
-        result.net_monthly_flow = result.avg_monthly_net
+        result.net_monthly_flow     = result.avg_monthly_net
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1073,10 +1075,15 @@ if __name__ == "__main__":
     import sys
 
     if len(sys.argv) < 2:
-        print("Usage: python statement_parser.py <statement.pdf>")
+        print("Usage: python statement_parser.py <statement.pdf> [password]")
         sys.exit(1)
 
-    r = StatementParser.parse(sys.argv[1])
+    pw  = sys.argv[2] if len(sys.argv) > 2 else None
+    enc = StatementParser.is_encrypted(sys.argv[1])
+    if enc:
+        print(f"[INFO] PDF is encrypted. Password provided: {'yes' if pw else 'no'}")
+
+    r = StatementParser.parse(sys.argv[1], password=pw)
 
     print("\n" + "=" * 60)
     print("  STATEMENT ANALYSIS")
