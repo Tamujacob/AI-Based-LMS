@@ -40,28 +40,44 @@ SUGGESTED_QUERIES = [
 
 def _pdf_is_encrypted(path: str) -> bool:
     """
-    Returns True if the PDF at *path* is password-protected.
-    Uses pdfplumber first, falls back to pypdf.
-    Returns False for images and non-PDF files (they never need a password).
+    Returns True if the PDF at *path* requires a password to read.
+    Returns False for images and non-PDF files.
+
+    Three-tier detection needed because pdfplumber silently opens some
+    encrypted PDFs (e.g. Equity Bank statements) without raising an
+    exception — it just returns empty text instead.
+
+    Tier 1 — pypdf is_encrypted flag (catches standard encryption headers)
+    Tier 2 — pdfplumber empty-text test (catches PDFs pypdf misses)
+    Tier 3 — exception fallback (anything else that fails to open)
     """
     ext = os.path.splitext(path)[1].lower()
     if ext not in (".pdf",):
         return False
-    try:
-        import pdfplumber
-        with pdfplumber.open(path) as pdf:
-            # pdfplumber raises an exception on encrypted PDFs when no password
-            # is given, so reaching this line means it opened fine → not encrypted.
-            _ = pdf.pages
-        return False
-    except Exception:
-        pass
+
+    # Tier 1: pypdf structural flag
     try:
         from pypdf import PdfReader
         reader = PdfReader(path)
-        return reader.is_encrypted
+        if reader.is_encrypted:
+            return True
     except Exception:
-        return False
+        pass
+
+    # Tier 2: pdfplumber empty-text test — catches PDFs that open without
+    # raising but yield no text without a password (Equity Bank, Stanbic)
+    try:
+        import pdfplumber
+        with pdfplumber.open(path) as pdf:
+            text = ""
+            for page in pdf.pages[:2]:
+                text += (page.extract_text() or "")
+        if not text.strip():
+            return True          # opened fine but all pages blank = needs PW
+    except Exception:
+        return True              # failed to open at all = encrypted
+
+    return False
 
 
 class ChatbotScreen(ctk.CTkFrame):
@@ -169,20 +185,25 @@ class ChatbotScreen(ctk.CTkFrame):
         self.messages_frame.columnconfigure(0, weight=1)
 
         # ── Attachment bar ─────────────────────────────────────────────────
-        # FIX 1: Correct column weights so all widgets actually render.
-        # FIX 2: Placeholder text updated to give clear instructions.
-        # FIX 4: Password row is shown/hidden based on encryption detection.
+        # Layout (3 columns, up to 3 rows):
+        #   col 0 — stretches (label / pw-label / error)
+        #   col 1 — stretches (password entry)
+        #   col 2 — fixed    (Remove button)
+        #
+        # Row 0: filename label  +  Remove button   (always visible when bar shown)
+        # Row 1: 🔒 label + password entry          (shown only for encrypted PDFs)
+        # Row 2: red error message                  (shown only after wrong password)
         self.attachment_bar = ctk.CTkFrame(
             chat_outer,
             fg_color=COLORS["bg_input"],
             corner_radius=8,
         )
-        # Not gridded yet — shown when a file is attached via _show_attachment_bar()
-        # Row 0: filename + remove button
-        # Row 1: password entry (only shown when file is encrypted)
-        self.attachment_bar.columnconfigure(0, weight=1)   # filename label stretches
-        self.attachment_bar.columnconfigure(1, weight=0)   # remove button fixed
+        # Not gridded into chat_outer yet — shown via _show_attachment_bar()
+        self.attachment_bar.columnconfigure(0, weight=0)   # pw label — fixed
+        self.attachment_bar.columnconfigure(1, weight=1)   # entry / filename — stretches
+        self.attachment_bar.columnconfigure(2, weight=0)   # Remove button — fixed
 
+        # Row 0 — filename (spans cols 0-1) + Remove button
         self.attachment_label = ctk.CTkLabel(
             self.attachment_bar,
             text="",
@@ -190,8 +211,8 @@ class ChatbotScreen(ctk.CTkFrame):
             text_color=COLORS["accent_green_dark"],
             anchor="w",
         )
-        self.attachment_label.grid(row=0, column=0, padx=(12, 4),
-                                   pady=(6, 2), sticky="ew")
+        self.attachment_label.grid(row=0, column=0, columnspan=2,
+                                   padx=(12, 4), pady=(8, 4), sticky="ew")
 
         ctk.CTkButton(
             self.attachment_bar,
@@ -203,27 +224,24 @@ class ChatbotScreen(ctk.CTkFrame):
             text_color=COLORS["danger"],
             corner_radius=6,
             command=self._remove_attachment,
-        ).grid(row=0, column=1, padx=8, pady=(6, 2))
+        ).grid(row=0, column=2, padx=(4, 8), pady=(8, 4))
 
-        # Password row — spans both columns; hidden/shown per _show_password_row()
-        self._pw_row = ctk.CTkFrame(
-            self.attachment_bar, fg_color="transparent")
-        self._pw_row.columnconfigure(1, weight=1)
-
-        ctk.CTkLabel(
-            self._pw_row,
+        # Row 1 — password label + entry (gridded/forgotten by _show_attachment_bar)
+        self._pw_label = ctk.CTkLabel(
+            self.attachment_bar,
             text="🔒 Password:",
             font=FONTS["body_small"],
             text_color=COLORS["text_secondary"],
             anchor="w",
-        ).grid(row=0, column=0, padx=(12, 6), pady=(0, 6))
+            width=100,
+        )
+        # Not gridded yet
 
         self.statement_password_var = ctk.StringVar()
         self.attachment_password_entry = ctk.CTkEntry(
-            self._pw_row,
+            self.attachment_bar,
             textvariable=self.statement_password_var,
-            # FIX 2: Clear instruction matching the business rule
-            placeholder_text="Last 4 digits of loan number (if encrypted)",
+            placeholder_text="Last 4 digits of loan number",
             show="•",
             fg_color=COLORS["bg_card"],
             border_color=COLORS["border"],
@@ -233,10 +251,9 @@ class ChatbotScreen(ctk.CTkFrame):
             height=32,
             border_width=1,
         )
-        self.attachment_password_entry.grid(
-            row=0, column=1, padx=(0, 12), pady=(0, 6), sticky="ew")
+        # Not gridded yet
 
-        # Error label shown on wrong password (FIX 3)
+        # Row 2 — error label (gridded/forgotten by _show_password_error)
         self._pw_error_label = ctk.CTkLabel(
             self.attachment_bar,
             text="",
@@ -244,7 +261,7 @@ class ChatbotScreen(ctk.CTkFrame):
             text_color=COLORS["danger"],
             anchor="w",
         )
-        # Not gridded until needed
+        # Not gridded yet
 
         # ── Input row — fixed height, never behind taskbar ─────────────────
         input_frame = ctk.CTkFrame(
@@ -374,27 +391,31 @@ class ChatbotScreen(ctk.CTkFrame):
     def _show_attachment_bar(self, filename: str, encrypted: bool):
         """
         Grid the attachment bar into row 2 of chat_outer.
-        Shows the password row only when *encrypted* is True (FIX 4).
-        Clears any previous error label.
+        Password row (row 1) is shown only when *encrypted* is True.
+        Clears any stale error label from a previous attempt.
         """
         self.attachment_label.configure(
             text=f"📎  {filename}  — click Send to analyse")
 
-        # Show/hide password row based on encryption state
+        # Show or hide the password widgets directly inside attachment_bar
         if encrypted:
-            self._pw_row.grid(row=1, column=0, columnspan=2, sticky="ew")
-            self.attachment_password_entry.focus()
+            self._pw_label.grid(row=1, column=0,
+                                padx=(12, 6), pady=(0, 8), sticky="w")
+            self.attachment_password_entry.grid(row=1, column=1, columnspan=2,
+                                                padx=(0, 12), pady=(0, 8),
+                                                sticky="ew")
+            self.after(100, self.attachment_password_entry.focus)
         else:
-            self._pw_row.grid_forget()
+            self._pw_label.grid_forget()
+            self.attachment_password_entry.grid_forget()
             self.statement_password_var.set("")
 
-        # Clear any old error
+        # Clear any stale error from a previous failed attempt
         self._pw_error_label.grid_forget()
         self._pw_error_label.configure(text="")
 
-        self.attachment_bar.grid(row=2, column=0, sticky="ew",
-                                 pady=(0, 4),
-                                 in_=self.attachment_bar.master)
+        # Grid the bar itself into chat_outer row 2
+        self.attachment_bar.grid(row=2, column=0, sticky="ew", pady=(0, 4))
 
     def _show_password_error(self, message: str):
         """
@@ -403,8 +424,8 @@ class ChatbotScreen(ctk.CTkFrame):
         The password field is highlighted red.
         """
         self._pw_error_label.configure(text=f"⚠  {message}")
-        self._pw_error_label.grid(row=2, column=0, columnspan=2,
-                                  padx=12, pady=(0, 6), sticky="ew")
+        self._pw_error_label.grid(row=2, column=0, columnspan=3,
+                                  padx=12, pady=(0, 8), sticky="ew")
 
         # Highlight the password entry border red to draw attention
         self.attachment_password_entry.configure(
@@ -465,6 +486,8 @@ class ChatbotScreen(ctk.CTkFrame):
         self._statement_result    = None
         self._file_is_encrypted   = False
         self.statement_password_var.set("")
+        self._pw_label.grid_forget()
+        self.attachment_password_entry.grid_forget()
         self._pw_error_label.configure(text="")
         self._pw_error_label.grid_forget()
         self.attachment_bar.grid_forget()
