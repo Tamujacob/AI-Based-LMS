@@ -89,6 +89,7 @@ class ChatbotScreen(ctk.CTkFrame):
         self._attached_statement  = None   # path of uploaded statement
         self._statement_result    = None   # parsed StatementResult
         self._file_is_encrypted   = False  # track whether current file needs PW
+        self._suggestions_popup   = None   # suggestions popup window
         self._build()
         self._check_api_status()
         self._add_message(
@@ -125,12 +126,11 @@ class ChatbotScreen(ctk.CTkFrame):
 
         main = ctk.CTkFrame(self, fg_color=COLORS["bg_primary"])
         main.grid(row=0, column=1, sticky="nsew")
-        main.columnconfigure(0, weight=3)
-        main.columnconfigure(1, weight=1)
+        main.columnconfigure(0, weight=1)
         main.rowconfigure(0, weight=1)
 
         self._build_chat_panel(main)
-        self._build_suggestions_panel(main)
+        # Suggested questions moved to popup button inside the chat panel
 
     # ── Chat panel ─────────────────────────────────────────────────────────────
 
@@ -146,6 +146,8 @@ class ChatbotScreen(ctk.CTkFrame):
         title_row = ctk.CTkFrame(chat_outer, fg_color="transparent")
         title_row.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         title_row.columnconfigure(1, weight=1)
+        title_row.columnconfigure(2, weight=0)
+        title_row.columnconfigure(3, weight=0)
 
         ctk.CTkLabel(
             title_row, text="AI Chatbot",
@@ -161,6 +163,17 @@ class ChatbotScreen(ctk.CTkFrame):
         self.status_badge.grid(row=0, column=1, sticky="w", padx=(12, 0))
 
         ctk.CTkButton(
+            title_row, text="💡 Suggestions",
+            width=120, height=30,
+            font=FONTS["body_small"],
+            fg_color=COLORS["bg_input"],
+            hover_color=COLORS["accent_green"],
+            text_color=COLORS["text_secondary"],
+            corner_radius=6,
+            command=self._show_suggestions_popup,
+        ).grid(row=0, column=2, sticky="e", padx=(0, 6))
+
+        ctk.CTkButton(
             title_row, text="Clear Chat",
             width=100, height=30,
             font=FONTS["body_small"],
@@ -169,7 +182,7 @@ class ChatbotScreen(ctk.CTkFrame):
             text_color=COLORS["text_secondary"],
             corner_radius=6,
             command=self._clear_chat,
-        ).grid(row=0, column=2, sticky="e")
+        ).grid(row=0, column=3, sticky="e")
 
         # ── Messages scrollable area ───────────────────────────────────────
         self.messages_frame = ctk.CTkScrollableFrame(
@@ -315,76 +328,94 @@ class ChatbotScreen(ctk.CTkFrame):
         )
         self.send_btn.grid(row=0, column=2)
 
-    # ── Suggestions panel ──────────────────────────────────────────────────────
+    # ── Suggestions popup ──────────────────────────────────────────────────────
 
     def _build_suggestions_panel(self, parent):
-        panel = ctk.CTkFrame(
-            parent,
+        """Suggestions are now a popup — this method is a no-op."""
+        pass
+
+    def _show_suggestions_popup(self):
+        """
+        Open a floating popup window listing suggested queries.
+        Closes automatically when a query is selected or the window
+        loses focus.
+        """
+        if hasattr(self, "_suggestions_popup") and self._suggestions_popup:
+            try:
+                self._suggestions_popup.destroy()
+            except Exception:
+                pass
+            self._suggestions_popup = None
+            return
+
+        popup = ctk.CTkToplevel(self)
+        popup.title("Suggested Questions")
+        popup.geometry("380x480")
+        popup.resizable(False, False)
+        popup.attributes("-topmost", True)
+        self._suggestions_popup = popup
+
+        # Position popup near the suggestions button
+        try:
+            x = self.winfo_rootx() + self.winfo_width() - 420
+            y = self.winfo_rooty() + 60
+            popup.geometry(f"380x480+{x}+{y}")
+        except Exception:
+            pass
+
+        popup.protocol("WM_DELETE_WINDOW", lambda: self._close_suggestions_popup())
+
+        frame = ctk.CTkScrollableFrame(
+            popup,
             fg_color=COLORS["bg_card"],
-            corner_radius=10,
-            border_width=1,
-            border_color=COLORS["border"],
+            scrollbar_button_color=COLORS["accent_green"],
         )
-        panel.grid(row=0, column=1, sticky="nsew", padx=(8, 24), pady=24)
-        panel.columnconfigure(0, weight=1)
+        frame.pack(fill="both", expand=True, padx=0, pady=0)
+        frame.columnconfigure(0, weight=1)
 
         ctk.CTkLabel(
-            panel, text="Suggested Questions",
+            frame, text="💡  Suggested Questions",
             font=FONTS["subheading"],
             text_color=COLORS["accent_green_dark"],
+            anchor="w",
         ).pack(anchor="w", padx=16, pady=(16, 6))
 
-        ctk.CTkFrame(
-            panel, fg_color=COLORS["border"], height=1,
-        ).pack(fill="x", padx=16, pady=(0, 6))
+        ctk.CTkFrame(frame, fg_color=COLORS["border"], height=1).pack(
+            fill="x", padx=16, pady=(0, 8))
 
         for query in SUGGESTED_QUERIES:
             ctk.CTkButton(
-                panel, text=query,
-                anchor="w", height=36,
+                frame, text=query,
+                anchor="w", height=38,
                 font=FONTS["body_small"],
                 fg_color="transparent",
                 hover_color=COLORS["bg_input"],
                 text_color=COLORS["text_secondary"],
                 corner_radius=6,
-                command=lambda q=query: self._use_suggestion(q),
+                command=lambda q=query: self._pick_suggestion(q),
             ).pack(fill="x", padx=8, pady=2)
 
-        ctk.CTkFrame(panel, fg_color="transparent").pack(
-            fill="both", expand=True)
-
-        # Statement upload hint
-        ctk.CTkFrame(
-            panel, fg_color=COLORS["border"], height=1,
-        ).pack(fill="x", padx=16, pady=(0, 4))
-
-        ctk.CTkButton(
-            panel,
-            text="📎  Analyse Statement",
-            height=36,
-            font=FONTS["body_small"],
-            fg_color=COLORS["accent_green"],
-            hover_color=COLORS["accent_green_dark"],
-            text_color="#FFFFFF",
-            corner_radius=8,
-            command=self._attach_statement,
-        ).pack(fill="x", padx=8, pady=(0, 4))
+        ctk.CTkFrame(frame, fg_color=COLORS["border"], height=1).pack(
+            fill="x", padx=16, pady=(8, 4))
 
         ctk.CTkLabel(
-            panel,
-            text="Upload a MoMo or bank\nstatement for a loan\nrecommendation.",
+            frame,
+            text="Powered by Groq · llama-3.3-70b",
             font=FONTS["caption"],
             text_color=COLORS["text_muted"],
-            justify="center",
-        ).pack(pady=(0, 8))
-
-        ctk.CTkLabel(
-            panel,
-            text="Powered by Groq (free)\nFalls back to local mode\nif no API key is set.",
-            font=FONTS["caption"],
-            text_color=COLORS["text_muted"],
-            justify="center",
         ).pack(pady=(0, 12))
+
+    def _pick_suggestion(self, query: str):
+        self._close_suggestions_popup()
+        self._use_suggestion(query)
+
+    def _close_suggestions_popup(self):
+        if hasattr(self, "_suggestions_popup") and self._suggestions_popup:
+            try:
+                self._suggestions_popup.destroy()
+            except Exception:
+                pass
+            self._suggestions_popup = None
 
     # ── Attachment bar helpers ─────────────────────────────────────────────────
 
