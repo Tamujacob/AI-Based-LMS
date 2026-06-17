@@ -109,10 +109,12 @@ class StatementResult:
     total_credits:        float = 0.0
     total_debits:         float = 0.0
     net_cash_flow:        float = 0.0
-    avg_monthly_income:   float = 0.0
+    avg_monthly_income:   float = 0.0   # 12-month average (no outlier stripping)
     avg_monthly_expense:  float = 0.0
     avg_monthly_net:      float = 0.0
-    net_monthly_flow:     float = 0.0
+    net_monthly_flow:     float = 0.0   # best income signal sent to ceiling engine
+    recent_avg_income:    float = 0.0   # 3-month trailing average (recency-weighted)
+    latest_balance:       float = 0.0   # last known account balance from transactions
     months_covered:       int   = 0
     income_consistency:   float = 0.0
     largest_credit:       float = 0.0
@@ -141,6 +143,8 @@ class StatementResult:
             f"Total Debits (Out):    UGX {self.total_debits:,.0f}",
             f"Net Cash Flow:         UGX {self.net_cash_flow:,.0f}",
             f"Avg Monthly Income:    UGX {self.avg_monthly_income:,.0f}",
+            f"Recent 3-Month Income: UGX {self.recent_avg_income:,.0f}",
+            f"Latest Balance:        UGX {self.latest_balance:,.0f}",
             f"Avg Monthly Expense:   UGX {self.avg_monthly_expense:,.0f}",
             f"Avg Monthly Net:       UGX {self.avg_monthly_net:,.0f}",
             f"Income Consistency:    {self.income_consistency:.0%}",
@@ -296,54 +300,66 @@ class StatementParser:
     # NIN extraction
     # ══════════════════════════════════════════════════════════════════════════
 
+    # Common words that appear in PDF headers as 14-char strings — NOT NINs
+    _NIN_FALSE_POSITIVES = {
+        "ACCOUNTNUMBER", "AACCOUNTUMBER", "STATEMENTDATE",
+        "AACCCCOOOUUNNTT", "CUSTOMERDETAIL", "BRANCHADDRESS",
+        "CLOSINGBALANCE", "OPENINGBALANCE", "AVAILABLEBALANC",
+    }
+
     @staticmethod
     def _extract_nin(text: str, result: StatementResult):
         """
-        Extract Uganda NIN from statement text using a 4-tier strategy:
+        Extract Uganda NIN from statement text using 3 tiers.
+        Tier 4 (blind header scan) removed — caused false positives like
+        "ACCOUNTNUMBER" being matched as a NIN.
 
-        Tier 1 — STRICT regex: C[MF] + 8 digits + 4 alphanumeric (most reliable)
-        Tier 2 — LABELLED: any 14-char token after a NIN/ID label keyword
-        Tier 3 — CONTEXT: scan first 800 chars (account details section) for
-                  any 14-char alphanumeric token near identity keywords
-        Tier 4 — LAST RESORT: any standalone 14-char alphanumeric in header
+        Tier 1 — STRICT regex: C[MF] + 8 digits + 4 alphanumeric
+        Tier 2 — LABELLED: 14-char token immediately after NIN/ID label
+        Tier 3 — CONTEXT: 14-char token near identity keywords in first 800 chars,
+                  must start with C[MF] to be accepted (reduces false positives)
 
         MTN MoMo statements do NOT contain NIN — result.nin stays "".
-        Bank statements (Stanbic, Equity, Centenary, DFCU) include NIN in the
-        account details header block per Bank of Uganda KYC requirements.
         """
+        def _is_valid_nin(token: str) -> bool:
+            t = token.upper()
+            if t in StatementParser._NIN_FALSE_POSITIVES:
+                return False
+            # Must not be a dictionary word repeated (AACCCC... pattern)
+            if len(set(t)) < 5:          # too few unique chars → not a real NIN
+                return False
+            return True
+
         # Tier 1 — strict NIN pattern anywhere in document
         m = _NIN_STRICT.search(text)
         if m:
-            result.nin = m.group(0).upper()
-            return
+            candidate = m.group(0).upper()
+            if _is_valid_nin(candidate):
+                result.nin = candidate
+                return
 
         # Tier 2 — labelled: "NIN: AB12345678CDEF"
         m = _NIN_LABELLED.search(text)
         if m:
             candidate = m.group(1).strip().upper()
-            if len(candidate) == 14:
+            if len(candidate) == 14 and _is_valid_nin(candidate):
                 result.nin = candidate
                 return
 
-        # Tier 3 — context scan in header block (first 800 chars)
+        # Tier 3 — context scan in first 800 chars, must start with C[MF]
         header = text[:800]
         context_re = re.compile(
             r'(?:nin|national\s*id|identification|id\s*no|id\s*number)'
-            r'.{0,30}?([A-Z0-9]{14})',
+            r'.{0,30}?(C[MF][A-Z0-9]{12})\b',
             re.IGNORECASE | re.DOTALL
         )
         m = context_re.search(header)
         if m:
-            result.nin = m.group(1).upper()
-            return
-
-        # Tier 4 — any standalone 14-char alphanumeric token in header
-        for token in re.findall(r'\b([A-Z]{1,2}[A-Z0-9]{12,13})\b',
-                                header, re.IGNORECASE):
-            if len(token) == 14:
-                result.nin = token.upper()
+            candidate = m.group(1).upper()
+            if _is_valid_nin(candidate):
+                result.nin = candidate
                 return
-        # If nothing found, result.nin stays "" — this is expected for MoMo
+        # Nothing found — stays "" (expected for MoMo and most image statements)
 
     # ══════════════════════════════════════════════════════════════════════════
     # Client name extraction
@@ -365,28 +381,53 @@ class StatementParser:
         Sets result.client_name (uppercase).
         Falls back to result.account_holder if no label matches.
         """
+        # Ordered from most-specific to least-specific.
+        # Each pattern captures the name portion after the label.
         name_patterns = [
+            # Explicit full-label patterns (highest confidence)
             r'account\s+holder\s*[:\-]\s*([A-Z][A-Za-z\s\'\-\.]{2,50})',
             r'account\s+name\s*[:\-]\s*([A-Z][A-Za-z\s\'\-\.]{2,50})',
             r'customer\s+name\s*[:\-]\s*([A-Z][A-Za-z\s\'\-\.]{2,50})',
             r'name\s+of\s+account\s+holder\s*[:\-]\s*([A-Z][A-Za-z\s\'\-\.]{2,50})',
             r'account\s+owner\s*[:\-]\s*([A-Z][A-Za-z\s\'\-\.]{2,50})',
+            # Equity Bank specific: "Printed for: FIRSTNAME LASTNAME"
+            r'printed\s+for\s*[:\-]?\s*([A-Z][A-Za-z\s\'\-\.]{2,50})',
+            # Equity Bank: "Account Title: NAME"
+            r'account\s+title\s*[:\-]\s*([A-Z][A-Za-z\s\'\-\.]{2,50})',
+            # Stanbic / generic: "Client: NAME"
+            r'client\s*[:\-]\s*([A-Z][A-Za-z\s\'\-\.]{2,50})',
+            # DFCU: "Account Details ... Name: ..."
+            r'(?:^|\n)\s*([A-Z]{2,}(?:\s+[A-Z]{2,}){1,4})\s*(?:\n|$)',
+            # Generic name label (lowest confidence — checked last)
             r'(?<!\w)name\s*[:\-]\s*([A-Z][A-Za-z\s\'\-\.]{2,50})',
         ]
 
+        # Words that signal the capture has gone too far
         _STOP_WORDS = re.compile(
             r'\s+(?:wallet|account|phone|mobile|from|to|date|number|'
-            r'period|statement|nin|national|balance|branch)',
+            r'period|statement|nin|national|balance|branch|printed|title)',
             re.IGNORECASE
         )
 
+        # Words that are definitely not a person's name
+        _NOT_A_NAME = {
+            "EQUITY BANK", "STANBIC BANK", "CENTENARY BANK", "DFCU BANK",
+            "MTN MOBILE", "AIRTEL MONEY", "BANK OF UGANDA", "LIMITED",
+            "STATEMENT", "ACCOUNT", "BRANCH", "DETAILS", "SUMMARY",
+        }
+
         for pat in name_patterns:
-            m = re.search(pat, text, re.IGNORECASE)
+            m = re.search(pat, text, re.IGNORECASE | re.MULTILINE)
             if m:
                 raw   = m.group(1).strip()
                 raw   = _STOP_WORDS.split(raw)[0].strip()
                 words = raw.split()
-                if len(words) >= 2 and not re.search(r'\d', raw) and len(raw) > 4:
+                # Valid: ≥2 words, no digits, reasonable length, not a bank name
+                if (len(words) >= 2
+                        and not re.search(r'\d', raw)
+                        and len(raw) > 4
+                        and raw.upper() not in _NOT_A_NAME
+                        and not any(n in raw.upper() for n in _NOT_A_NAME)):
                     result.client_name    = raw.upper()
                     result.account_holder = result.account_holder or raw.upper()
                     return
@@ -872,8 +913,6 @@ class StatementParser:
     # Summary builder — shared by all parsers
     # ══════════════════════════════════════════════════════════════════════════
 
-    _ONE_OFF_THRESHOLD = 500_000  # UGX
-
     @staticmethod
     def _build_summary(result: StatementResult, raw_text: str):
         txns    = result.transactions
@@ -885,6 +924,11 @@ class StatementParser:
         result.net_cash_flow  = result.total_credits - result.total_debits
         result.largest_credit = max((t.amount for t in credits), default=0)
         result.largest_debit  = max((abs(t.amount) for t in debits), default=0)
+
+        # Latest known balance — from the most recent transaction that has one
+        bal_txns = [t for t in txns if t.balance is not None]
+        if bal_txns:
+            result.latest_balance = bal_txns[-1].balance
 
         monthly: dict = defaultdict(lambda: {"in": 0.0, "out": 0.0, "count": 0})
         for t in txns:
@@ -925,7 +969,6 @@ class StatementParser:
         ]
 
         result.months_covered = max(len(result.monthly_summaries), 1)
-
         incomes = [m.total_in for m in result.monthly_summaries]
 
         def _median(xs):
@@ -936,34 +979,56 @@ class StatementParser:
             mid = n // 2
             return (s[mid] if n % 2 == 1 else (s[mid - 1] + s[mid]) / 2)
 
-        adjusted_total_credits = result.total_credits
-        if incomes:
-            s  = sorted(incomes)
-            q1 = _median(s[:len(s)//2])
-            q3 = _median(s[(len(s)+1)//2:])
-            iqr   = max(0.0, q3 - q1)
-            upper = q3 + 1.5 * iqr
-            one_off_sum = sum(i for i in incomes if i > upper)
-            adjusted_total_credits = max(0.0, result.total_credits - one_off_sum)
-
-        result.avg_monthly_income  = (adjusted_total_credits / result.months_covered
-                                      if result.months_covered else 0.0)
+        # ── Avg monthly income: straight average, NO outlier stripping ────────
+        # IQR stripping was incorrectly removing genuine large credits
+        # (e.g. business income, large transfers) and zeroing out income entirely.
+        result.avg_monthly_income = (result.total_credits / result.months_covered
+                                     if result.months_covered else 0.0)
         result.avg_monthly_expense = (result.total_debits / result.months_covered
                                       if result.months_covered else 0.0)
         result.avg_monthly_net     = (result.avg_monthly_income
                                       - result.avg_monthly_expense)
 
-        if incomes and len(incomes) >= 2:
-            med = _median([i for i in incomes])
-            if med == 0:
-                nonzero = sum(1 for i in incomes if i > 0)
-                result.income_consistency = (0.0 if nonzero == 0
-                                             else nonzero / len(incomes))
-            else:
-                in_band = sum(1 for i in incomes if 0.5 * med <= i <= 1.5 * med)
-                result.income_consistency = in_band / len(incomes)
+        # ── Recent 3-month trailing average (recency-weighted income signal) ──
+        # Uses only the last 3 months so a large recent credit (like the 16M)
+        # is properly reflected without being diluted by older zero months.
+        recent_summaries = result.monthly_summaries[-3:]
+        if recent_summaries:
+            result.recent_avg_income = (
+                sum(m.total_in for m in recent_summaries) / len(recent_summaries))
         else:
-            result.income_consistency = 0.5
+            result.recent_avg_income = result.avg_monthly_income
+
+        # ── net_monthly_flow: use the HIGHER of 12-month avg or 3-month recent ─
+        # This ensures a borrower with recent strong income is not penalised
+        # for an earlier gap period, while still protecting against one-month
+        # spikes being the only signal.
+        best_income  = max(result.avg_monthly_income, result.recent_avg_income)
+        best_expense = result.avg_monthly_expense
+        result.net_monthly_flow = best_income - best_expense
+
+        # ── Income consistency: only count months that had ANY transactions ───
+        # Zero-income months caused by a gap period (no transactions at all)
+        # should not penalise the consistency score — the borrower simply
+        # was not active in those months, not earning irregularly.
+        active_incomes = [m.total_in for m in result.monthly_summaries
+                          if m.tx_count > 0]
+        if active_incomes and len(active_incomes) >= 2:
+            med = _median(active_incomes)
+            if med == 0:
+                nonzero = sum(1 for i in active_incomes if i > 0)
+                result.income_consistency = (0.0 if nonzero == 0
+                                             else nonzero / len(active_incomes))
+            else:
+                # Band: within 30%-300% of median (wider than before to handle
+                # irregular earners whose income genuinely varies month-to-month)
+                in_band = sum(1 for i in active_incomes
+                              if 0.30 * med <= i <= 3.0 * med)
+                result.income_consistency = in_band / len(active_incomes)
+        elif active_incomes:
+            result.income_consistency = 1.0   # only 1 active month — no pattern yet
+        else:
+            result.income_consistency = 0.0
 
         credit_tx_by_month = defaultdict(list)
         for t in credits:
@@ -994,7 +1059,6 @@ class StatementParser:
             result.has_salary_pattern = True
 
         result.has_irregular_income = result.income_consistency < 0.5
-        result.net_monthly_flow     = result.avg_monthly_net
 
 
 # ══════════════════════════════════════════════════════════════════════════════
