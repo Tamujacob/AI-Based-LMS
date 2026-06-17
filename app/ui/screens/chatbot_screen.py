@@ -681,18 +681,25 @@ class ChatbotScreen(ctk.CTkFrame):
         bubble = ctk.CTkFrame(wrapper, fg_color=bubble_color, corner_radius=10)
         bubble.pack(anchor=align, pady=(2, 0), fill="x")
 
+        # Height: 1 line = ~18px, pad 20px top+bottom, cap at 400px
+        line_count  = text.count("\n") + 1
+        char_lines  = len(text) // 80          # approx wrapped lines
+        total_lines = line_count + char_lines
+        height      = min(400, max(32, total_lines * 18 + 20))
+
         txt = ctk.CTkTextbox(
             bubble,
             width=1,
-            height=max(100, min(260, 20 + 20 * (text.count('\n') + len(text) // 70))),
+            height=height,
             fg_color=bubble_color,
             text_color=text_color,
             font=FONTS["body_small"],
             wrap="word",
             corner_radius=8,
             border_width=0,
+            activate_scrollbars=False,
         )
-        txt.pack(fill="x", padx=10, pady=10)
+        txt.pack(fill="x", padx=10, pady=(8, 8))
         txt.insert("0.0", text)
         txt.configure(state="disabled")
 
