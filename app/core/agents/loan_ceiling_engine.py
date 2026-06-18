@@ -1,131 +1,112 @@
 """
 app/core/agents/loan_ceiling_engine.py
 ─────────────────────────────────────────────────────────
-Phase 2 — Loan Ceiling Engine
+Loan Ceiling Engine — Bingongold Credit
 
-Takes a StatementResult (from statement_parser.py) plus
-optional client profile data and calculates:
+Business rules (confirmed):
+  - Loan durations: 1 month, 3 months, 6 months ONLY
+  - Typical loan: 3 months
+  - Interest: 10% per month flat on principal
+  - Min loan: UGX 100,000
+  - Max loan: UGX 50,000,000
+  - Repayment capacity: max 30% of net monthly flow per instalment
+  - Risk threshold: only recommend if repayment probability >= 50%
 
-  • Maximum safe loan amount (the "ceiling")
-  • Maximum safe monthly instalment
-  • Recommended loan duration
-  • Three loan scenarios (conservative / standard / extended)
-  • Affordability score (0–100)
-  • Red flags from the statement
+Interest formula:
+  Total Interest     = Principal × 10% × Duration
+  Total Repayable    = Principal + Total Interest
+  Monthly Instalment = Total Repayable ÷ Duration
 
-100% offline — no internet, no API, no ML model needed.
-Pure financial calculation logic.
+Working backwards from instalment:
+  Principal = Instalment × Duration ÷ (1 + 0.10 × Duration)
 
-v2 fixes:
-  - Uses recent_avg_income (3-month trailing) vs 12-month avg,
-    whichever is higher — so a large recent credit is not diluted
-  - latest_balance used as secondary capacity signal
-  - Red flags no longer fire on income_consistency alone when recent
-    income is strong
-  - Negative net flow does not zero out income when recent income exists
-  - Income source label is clearer in output
-
-Usage:
-    from app.core.agents.statement_parser import StatementParser
-    from app.core.agents.loan_ceiling_engine import LoanCeilingEngine
-
-    result  = StatementParser.parse("statement.pdf")
-    ceiling = LoanCeilingEngine.calculate(result)
-    print(ceiling.recommended_ceiling)
-    print(ceiling.scenarios)
+  1-month:  Principal = Instalment × 1  ÷ 1.10  = Instalment × 0.909
+  3-month:  Principal = Instalment × 3  ÷ 1.30  = Instalment × 2.308
+  6-month:  Principal = Instalment × 6  ÷ 1.60  = Instalment × 3.750
 """
 
 from dataclasses import dataclass, field
-from decimal import Decimal
-from typing import Optional, List
+from decimal import Decimal, ROUND_HALF_UP
+from typing import List, Optional
+
+
+# ── Duration constants ────────────────────────────────────────────────────────
+DURATIONS = [1, 3, 6]          # the only valid loan durations
+TYPICAL_DURATION = 3           # used for headline recommended_ceiling
+
+# ── Risk thresholds ───────────────────────────────────────────────────────────
+# A scenario is "viable" only if the borrower can cover the instalment
+# with at least 50% repayment probability — defined here as the instalment
+# consuming no more than 60% of net flow (conservative safety margin).
+# Below 50% net flow coverage the loan is flagged as high risk.
+RISK_THRESHOLD_PCT   = Decimal("0.60")   # instalment / net_flow must be <= 60%
+REPAYMENT_RATIO      = Decimal("0.30")   # target: instalment = 30% of net flow
+INTEREST_RATE        = Decimal("0.10")   # 10% per month on principal
+MIN_LOAN             = Decimal("100000")
+MAX_LOAN             = Decimal("50000000")
 
 
 @dataclass
 class LoanScenario:
-    """One of three loan options presented to the borrower."""
-    name:               str
-    principal:          Decimal
     duration_months:    int
+    principal:          Decimal
     monthly_instalment: Decimal
     total_repayable:    Decimal
     total_interest:     Decimal
-    affordability_pct:  float        # % of net monthly flow used for repayment
+    affordability_pct:  float    # instalment as % of net flow
+    is_viable:          bool     # True if repayment probability >= 50%
+    risk_label:         str      # "Low", "Moderate", "High"
 
 
 @dataclass
 class CeilingResult:
-    """Full output from the Loan Ceiling Engine."""
-    recommended_ceiling:      Decimal
+    recommended_ceiling:      Decimal      # 3-month principal
     max_monthly_instalment:   Decimal
-    recommended_duration:     int
     affordability_score:      int          # 0–100
     income_used:              Decimal
     income_source:            str
 
-    scenarios:                List[LoanScenario] = field(default_factory=list)
-    red_flags:                List[str]    = field(default_factory=list)
-    warnings:                 List[str]    = field(default_factory=list)
-    interest_rate:            Decimal      = Decimal("10")
+    scenarios:    List[LoanScenario] = field(default_factory=list)
+    red_flags:    List[str]          = field(default_factory=list)
+    warnings:     List[str]          = field(default_factory=list)
+    interest_rate: Decimal           = Decimal("10")
 
     def as_text(self) -> str:
         lines = [
-            "═" * 52,
-            "  LOAN CEILING ANALYSIS",
-            "═" * 52,
-            f"  Income Source:      {self.income_source.upper()}",
-            f"  Monthly Income:     UGX {float(self.income_used):,.0f}",
-            f"  Affordability:      {self.affordability_score}/100",
+            "═" * 54,
+            "  LOAN CEILING — BINGONGOLD CREDIT",
+            "═" * 54,
+            f"  Income Source:       {self.income_source}",
+            f"  Monthly Income Used: UGX {float(self.income_used):,.0f}",
+            f"  Max Instalment(30%): UGX {float(self.max_monthly_instalment):,.0f}",
+            f"  Affordability Score: {self.affordability_score}/100",
+            f"  Recommended Ceiling: UGX {float(self.recommended_ceiling):,.0f}  (3-month loan)",
             "",
-            f"  RECOMMENDED CEILING: UGX {float(self.recommended_ceiling):,.0f}",
-            f"  Max Monthly Payment: UGX {float(self.max_monthly_instalment):,.0f}",
-            f"  Suggested Duration:  {self.recommended_duration} months",
-            "",
-            "─" * 52,
-            "  THREE SCENARIOS",
-            "─" * 52,
+            "─" * 54,
+            "  SCENARIOS",
+            "─" * 54,
         ]
         for s in self.scenarios:
+            viable_tag = "✅ Viable" if s.is_viable else "⚠ High Risk"
             lines += [
-                f"  [{s.name.upper()}]",
-                f"    Loan Amount:  UGX {float(s.principal):,.0f}",
-                f"    Duration:     {s.duration_months} months",
-                f"    Monthly Pay:  UGX {float(s.monthly_instalment):,.0f}",
-                f"    Total Repay:  UGX {float(s.total_repayable):,.0f}",
-                f"    Income Used:  {s.affordability_pct:.0f}%",
+                f"  {s.duration_months}-MONTH LOAN  [{s.risk_label}]  {viable_tag}",
+                f"    Principal:   UGX {float(s.principal):,.0f}",
+                f"    Monthly Pay: UGX {float(s.monthly_instalment):,.0f}",
+                f"    Total Repay: UGX {float(s.total_repayable):,.0f}",
+                f"    Income Used: {s.affordability_pct:.0f}%",
                 "",
             ]
         if self.red_flags:
-            lines += ["─" * 52, "  ⚠ RED FLAGS"]
+            lines += ["─" * 54, "  ⚠ RED FLAGS"]
             lines += [f"    • {f}" for f in self.red_flags]
         if self.warnings:
             lines += ["", "  ℹ NOTES"]
             lines += [f"    • {w}" for w in self.warnings]
-        lines.append("═" * 52)
+        lines.append("═" * 54)
         return "\n".join(lines)
 
 
 class LoanCeilingEngine:
-    """
-    Calculates the maximum safe loan amount from financial statement data.
-
-    Interest method (Bingongold Credit): 10% per month on principal.
-      Total Interest     = Principal × 10% × Duration (months)
-      Total Repayable    = Principal + Total Interest
-      Monthly Instalment = Total Repayable ÷ Duration
-
-    Working backwards from a target instalment:
-      Principal = Instalment × Duration ÷ (1 + 0.10 × Duration)
-    """
-
-    REPAYMENT_RATIO     = Decimal("0.30")
-    INTEREST_RATE       = Decimal("0.10")
-    MIN_LOAN            = Decimal("100000")
-    MAX_LOAN            = Decimal("50000000")
-    DEFAULT_DURATION    = 12
-    CONSERVATIVE_RATIO  = Decimal("0.70")
-    EXTENDED_RATIO      = Decimal("1.40")
-    CONSERVATIVE_MONTHS = 6
-    EXTENDED_MONTHS     = 24
 
     @classmethod
     def calculate(
@@ -133,215 +114,192 @@ class LoanCeilingEngine:
         statement_result=None,
         stated_income: float = 0,
         existing_loans_monthly: float = 0,
-        preferred_duration: int = None,
+        preferred_duration: int = None,   # ignored — all 3 durations always shown
     ) -> CeilingResult:
+
         red_flags = []
         warnings  = []
 
-        # ── Step 1: Determine best income signal ──────────────────────────────
-        #
-        # Priority order:
-        #   A) recent_avg_income  (3-month trailing — most current)
-        #   B) avg_monthly_income (12-month average — broader context)
-        #   C) stated income      (self-reported fallback)
-        #   D) minimum assumption
-        #
-        # We use whichever of A or B is HIGHER as the income signal.
-        # This protects against two failure modes:
-        #   1. Large recent credit diluted by old zero months (use recent)
-        #   2. Single lucky month masking a pattern of zero income (use 12-month)
-
+        # ── Step 1: Best income signal ────────────────────────────────────────
         net_flow      = Decimal("0")
         income_source = "stated"
         latest_balance = Decimal("0")
 
-        if statement_result and hasattr(statement_result, "net_monthly_flow"):
-            avg_12m   = Decimal(str(max(0.0, statement_result.avg_monthly_income)))
-            recent_3m = Decimal(str(max(0.0, getattr(statement_result,
-                                                      "recent_avg_income", 0.0))))
-            latest_balance = Decimal(str(getattr(statement_result,
-                                                  "latest_balance", 0.0)))
-
-            # Use higher of 12-month or 3-month average as income base
-            best_income = max(avg_12m, recent_3m)
-
+        if statement_result and hasattr(statement_result, "avg_monthly_income"):
+            avg_12m    = Decimal(str(max(0.0, statement_result.avg_monthly_income)))
+            recent_3m  = Decimal(str(max(0.0, getattr(statement_result,
+                                                       "recent_avg_income", 0.0))))
             avg_expense = Decimal(str(max(0.0, statement_result.avg_monthly_expense)))
+            latest_balance = Decimal(str(max(0.0, getattr(statement_result,
+                                                           "latest_balance", 0.0))))
+
+            # Use whichever income signal is stronger
+            best_income = max(avg_12m, recent_3m)
             net_flow    = best_income - avg_expense
 
-            # Label the income source clearly
-            if recent_3m > avg_12m:
-                income_source = "statement (recent 3-month avg)"
+            if recent_3m >= avg_12m:
+                income_source = f"Statement — recent 3-month avg (UGX {float(recent_3m):,.0f})"
             else:
-                income_source = "statement (12-month avg)"
+                income_source = f"Statement — 12-month avg (UGX {float(avg_12m):,.0f})"
 
-            # ── Red flags — context-aware ──────────────────────────────────
-            # Only flag irregular income if recent income is also weak.
-            # A borrower with strong recent income after a gap is not high-risk.
+            # Red flags
             if statement_result.income_consistency < 0.5 and recent_3m < avg_12m:
                 red_flags.append(
-                    "Income is irregular and recent income is below average — "
-                    "monitor repayment closely.")
+                    "Irregular income with weak recent earnings — high repayment risk.")
             elif statement_result.income_consistency < 0.5:
                 warnings.append(
-                    "Income pattern is irregular over 12 months, but recent "
-                    "3-month income is strong.")
+                    "Income irregular over 12 months but recent 3-month trend is strong.")
 
             if net_flow < 0:
                 if recent_3m > 0:
-                    # Net flow is negative due to large recent spending,
-                    # but there is real recent income — use recent income only
                     warnings.append(
-                        "Overall net cash flow is negative (high spending month). "
-                        "Ceiling based on recent income only.")
-                    net_flow = recent_3m * cls.REPAYMENT_RATIO / cls.REPAYMENT_RATIO
+                        "Net flow negative due to high recent spending. "
+                        "Using recent income as base.")
+                    net_flow = recent_3m
                 else:
                     red_flags.append(
-                        "Statement shows negative net flow — "
-                        "borrower spends more than they earn.")
+                        "Negative net cash flow — borrower spends more than earned.")
                     net_flow = Decimal("0")
 
             if len(statement_result.transactions) < 5:
-                warnings.append(
-                    "Very few transactions found — statement may be incomplete.")
+                warnings.append("Very few transactions — statement may be incomplete.")
 
         elif stated_income > 0:
             net_flow      = Decimal(str(stated_income)) * Decimal("0.60")
-            income_source = "stated"
-            warnings.append(
-                "No statement uploaded. "
-                "Using 60% of stated income as estimated net flow.")
+            income_source = f"Stated income × 60% (UGX {float(net_flow):,.0f})"
+            warnings.append("No statement provided. Using 60% of stated income.")
         else:
             net_flow      = Decimal("50000")
-            income_source = "minimum"
-            warnings.append(
-                "No income data available. "
-                "Using minimum assumption of UGX 50,000/month.")
+            income_source = "Minimum assumption (UGX 50,000)"
+            warnings.append("No income data. Using minimum UGX 50,000/month.")
 
-        # Subtract existing loan commitments
+        # Deduct existing commitments
         if existing_loans_monthly > 0:
             net_flow -= Decimal(str(existing_loans_monthly))
             if net_flow < 0:
-                red_flags.append(
-                    "Existing loan payments exceed estimated net income.")
+                red_flags.append("Existing loan payments exceed net income.")
                 net_flow = Decimal("0")
 
         # ── Step 2: Max monthly instalment (30% of net flow) ─────────────────
-        max_instalment = net_flow * cls.REPAYMENT_RATIO
+        max_instalment = net_flow * REPAYMENT_RATIO
 
-        # ── Step 3: Standard ceiling from instalment ──────────────────────────
-        duration = preferred_duration or cls.DEFAULT_DURATION
-        standard_ceiling = (
-            max_instalment * duration / (1 + cls.INTEREST_RATE * duration)
-        )
+        # ── Step 3: Build one scenario per duration ───────────────────────────
+        scenarios = []
+        for months in DURATIONS:
+            scenario = cls._build_scenario(months, max_instalment,
+                                           net_flow, latest_balance)
+            scenarios.append(scenario)
 
-        # ── Step 3b: Balance-informed ceiling boost ───────────────────────────
-        # If the borrower has a meaningful account balance, use it as a
-        # secondary signal to allow a modest ceiling boost (up to 50% of balance).
-        # This handles cases like: 7M balance after sending 8M — clear capacity.
-        if latest_balance > cls.MIN_LOAN:
-            balance_ceiling = latest_balance * Decimal("0.50")
-            if balance_ceiling > standard_ceiling:
-                warnings.append(
-                    f"Ceiling boosted from UGX {float(standard_ceiling):,.0f} "
-                    f"to UGX {float(balance_ceiling):,.0f} based on account balance "
-                    f"of UGX {float(latest_balance):,.0f}.")
-                standard_ceiling = balance_ceiling
+        # ── Step 4: Recommended ceiling = 3-month principal ──────────────────
+        three_month = next((s for s in scenarios if s.duration_months == 3), None)
+        recommended = three_month.principal if three_month else MIN_LOAN
 
-        standard_ceiling = cls._apply_caps(standard_ceiling)
+        # ── Step 5: Affordability score (based on 3-month scenario) ──────────
+        score = cls._affordability_score(net_flow, recommended, 3, red_flags)
 
-        # ── Step 4: Affordability score ───────────────────────────────────────
-        score = cls._affordability_score(
-            net_flow, standard_ceiling, duration, red_flags)
-
-        # ── Step 5: Three scenarios ───────────────────────────────────────────
-        scenarios = [
-            cls._build_scenario(
-                "Conservative",
-                standard_ceiling * cls.CONSERVATIVE_RATIO,
-                cls.CONSERVATIVE_MONTHS,
-                net_flow,
-            ),
-            cls._build_scenario(
-                "Standard",
-                standard_ceiling,
-                duration,
-                net_flow,
-            ),
-            cls._build_scenario(
-                "Extended",
-                cls._apply_caps(standard_ceiling * cls.EXTENDED_RATIO),
-                cls.EXTENDED_MONTHS,
-                net_flow,
-            ),
-        ]
-
-        # income_used = the net flow that drove the ceiling
         return CeilingResult(
-            recommended_ceiling    = standard_ceiling,
+            recommended_ceiling    = recommended,
             max_monthly_instalment = max_instalment,
-            recommended_duration   = duration,
             affordability_score    = score,
             income_used            = net_flow,
             income_source          = income_source,
             scenarios              = scenarios,
             red_flags              = red_flags,
             warnings               = warnings,
-            interest_rate          = cls.INTEREST_RATE * 100,
+            interest_rate          = INTEREST_RATE * 100,
         )
 
     @classmethod
     def _build_scenario(
         cls,
-        name: str,
-        principal: Decimal,
-        duration: int,
+        months: int,
+        max_instalment: Decimal,
         net_flow: Decimal,
+        latest_balance: Decimal,
     ) -> LoanScenario:
-        principal = cls._apply_caps(principal)
-        interest  = principal * cls.INTEREST_RATE * Decimal(str(duration))
-        total     = principal + interest
-        monthly   = total / duration if duration > 0 else total
-        aff_pct   = (float(monthly) / float(net_flow) * 100) if net_flow > 0 else 0
+        """
+        Build a single scenario for *months* duration.
+
+        Principal = max_instalment × months ÷ (1 + 0.10 × months)
+
+        Balance boost: if the borrower's account balance supports a higher
+        loan than the income calculation gives, use 40% of balance as an
+        alternative ceiling — only when it improves the recommendation.
+        The boost is capped at 2× the income-based ceiling so we don't
+        over-lend based on a single large deposit.
+        """
+        # Income-based principal
+        denom     = 1 + INTEREST_RATE * months
+        principal = (max_instalment * months / denom
+                     if max_instalment > 0 else Decimal("0"))
+
+        # Balance boost (conservative: 40% of balance, capped at 2× income ceiling)
+        if latest_balance > MIN_LOAN:
+            balance_principal = latest_balance * Decimal("0.40")
+            balance_principal = min(balance_principal, principal * 2)
+            if balance_principal > principal:
+                principal = balance_principal
+
+        principal = cls._round(principal)
+
+        # Recalculate instalment from final principal
+        interest   = principal * INTEREST_RATE * months
+        total      = principal + interest
+        instalment = total / months
+
+        aff_pct = (float(instalment) / float(net_flow) * 100
+                   if net_flow > 0 else 999.0)
+
+        # Risk label
+        if aff_pct <= 30:
+            risk_label = "Low"
+        elif aff_pct <= 50:
+            risk_label = "Moderate"
+        elif aff_pct <= 60:
+            risk_label = "High"
+        else:
+            risk_label = "Very High"
+
+        # Viable = instalment consumes <= 60% of net flow (>= 50% repay probability)
+        is_viable = aff_pct <= float(RISK_THRESHOLD_PCT * 100)
+
         return LoanScenario(
-            name               = name,
+            duration_months    = months,
             principal          = principal,
-            duration_months    = duration,
-            monthly_instalment = monthly,
+            monthly_instalment = instalment,
             total_repayable    = total,
             total_interest     = interest,
             affordability_pct  = round(aff_pct, 1),
+            is_viable          = is_viable,
+            risk_label         = risk_label,
         )
 
     @classmethod
-    def _apply_caps(cls, amount: Decimal) -> Decimal:
-        amount = max(cls.MIN_LOAN, amount)
-        amount = min(cls.MAX_LOAN, amount)
+    def _round(cls, amount: Decimal) -> Decimal:
+        """Round to nearest UGX 10,000 and apply min/max caps."""
+        amount = max(MIN_LOAN, min(MAX_LOAN, amount))
         return Decimal(str(round(float(amount) / 10000) * 10000))
 
     @classmethod
     def _affordability_score(
         cls,
         net_flow: Decimal,
-        ceiling: Decimal,
-        duration: int,
+        principal: Decimal,
+        months: int,
         red_flags: list,
     ) -> int:
         if net_flow <= 0:
             return 10
-        total   = ceiling * (1 + cls.INTEREST_RATE * duration)
-        monthly = total / duration
-        ratio   = float(monthly) / float(net_flow)
+        total    = principal * (1 + INTEREST_RATE * months)
+        monthly  = total / months
+        ratio    = float(monthly) / float(net_flow)
 
-        if ratio < 0.20:
-            score = 90
-        elif ratio < 0.30:
-            score = 75
-        elif ratio < 0.40:
-            score = 60
-        elif ratio < 0.50:
-            score = 45
-        else:
-            score = 25
+        if ratio <= 0.20:   score = 95
+        elif ratio <= 0.30: score = 80
+        elif ratio <= 0.40: score = 65
+        elif ratio <= 0.50: score = 50
+        elif ratio <= 0.60: score = 35
+        else:               score = 15
 
-        score -= len(red_flags) * 10
+        score -= len(red_flags) * 8
         return max(0, min(100, score))
