@@ -331,14 +331,19 @@ class StatementResultCard(ctk.CTkFrame):
     # ── Loan scenarios ────────────────────────────────────────────────────────
 
     def _build_loan_scenarios(self):
+        """
+        Renders exactly 3 scenario cards: 1-month, 3-month, 6-month.
+        3-month is highlighted as the typical Bingongold loan.
+        Each card shows risk label and viability from the ceiling engine.
+        """
         c = self.ceiling
         r = self.result
 
+        # ── Normalise scenarios from CeilingResult ────────────────────────────
         scenarios = []
-
         if c and hasattr(c, "scenarios") and c.scenarios:
-            for i, s in enumerate(c.scenarios):
-                def _g(obj, *keys, default=0):
+            for s in c.scenarios:
+                def _g(obj, *keys, default=None):
                     for k in keys:
                         v = (obj.get(k) if isinstance(obj, dict)
                              else getattr(obj, k, None))
@@ -346,37 +351,56 @@ class StatementResultCard(ctk.CTkFrame):
                             return v
                     return default
 
+                months    = int(_g(s, "duration_months", "months",
+                                   "duration", "term") or 3)
+                principal = float(_g(s, "principal", "loan_amount",
+                                     "amount") or 0)
+                instalment = float(_g(s, "monthly_instalment", "instalment",
+                                      "monthly_payment", "payment") or 0)
+                aff_raw   = _g(s, "affordability_pct", "pct_income",
+                                "percentage") or 0
+                aff_pct   = float(aff_raw) / 100 if float(aff_raw) > 1 else float(aff_raw)
+                is_viable = bool(_g(s, "is_viable") if _g(s, "is_viable") is not None
+                                 else aff_pct <= 0.60)
+                risk_label = str(_g(s, "risk_label") or (
+                    "Low" if aff_pct <= 0.30 else
+                    "Moderate" if aff_pct <= 0.50 else
+                    "High" if aff_pct <= 0.60 else "Very High"))
+
                 scenarios.append({
-                    "name":       str(_g(s, "name", default=f"Option {i+1}")),
-                    "principal":  float(_g(s, "principal", "loan_amount", "amount")),
-                    "months":     int(_g(s, "duration_months", "months",
-                                        "duration", "term", default=12)),
-                    "instalment": float(_g(s, "monthly_instalment", "instalment",
-                                          "monthly_payment", "payment")),
-                    "pct_income": float(_g(s, "affordability_pct",
-                                          "pct_income", "percentage")) / 100
-                                  if _g(s, "affordability_pct",
-                                        "pct_income", "percentage") > 1
-                                  else float(_g(s, "affordability_pct",
-                                               "pct_income", "percentage")),
+                    "months":     months,
+                    "principal":  principal,
+                    "instalment": instalment,
+                    "aff_pct":    aff_pct,
+                    "is_viable":  is_viable,
+                    "risk_label": risk_label,
                 })
         else:
-            # Fallback: build from ceiling engine income_used or parser income
-            income = float(c.income_used) if c else r.avg_monthly_income or 0
-            for name, pct, mos in [("Conservative", 0.20, 6),
-                                    ("Standard",     0.30, 12),
-                                    ("Extended",     0.40, 24)]:
-                inst = income * pct
+            # Fallback: calculate directly — durations 1, 3, 6 months
+            income = float(c.income_used) if c else (r.avg_monthly_income or 0)
+            for mos in [1, 3, 6]:
+                inst      = income * 0.30
                 principal = (inst * mos) / (1 + 0.10 * mos) if mos else 0
+                aff_pct   = (inst / income) if income > 0 else 0
                 scenarios.append({
-                    "name": name, "principal": round(principal),
-                    "months": mos, "instalment": round(inst),
-                    "pct_income": pct,
+                    "months": mos, "principal": round(principal),
+                    "instalment": round(inst), "aff_pct": aff_pct,
+                    "is_viable": aff_pct <= 0.60, "risk_label": "Moderate",
                 })
 
         if not scenarios:
             return
 
+        # ── Risk colour helper ────────────────────────────────────────────────
+        def _risk_color(label: str) -> str:
+            return {
+                "Low":       COLORS.get("accent_green", "#276749"),
+                "Moderate":  COLORS.get("warning", "#D69E2E"),
+                "High":      "#E53E3E",
+                "Very High": "#9B2335",
+            }.get(label, COLORS.get("text_muted", "#718096"))
+
+        # ── Layout ────────────────────────────────────────────────────────────
         section = ctk.CTkFrame(self, fg_color="transparent")
         section.grid(row=8, column=0, sticky="ew", padx=16, pady=10)
         for i in range(len(scenarios)):
@@ -384,7 +408,7 @@ class StatementResultCard(ctk.CTkFrame):
 
         ctk.CTkLabel(
             section,
-            text="Loan scenarios  (10% per month on principal)",
+            text="Loan scenarios  ·  10% per month on principal  ·  Max 6 months",
             font=FONTS.get("caption", ("Helvetica", 11)),
             text_color=COLORS.get("text_muted", "#718096"),
             anchor="w",
@@ -392,42 +416,48 @@ class StatementResultCard(ctk.CTkFrame):
                sticky="w", pady=(0, 8))
 
         for i, sc in enumerate(scenarios):
-            name      = sc["name"]
-            principal = sc["principal"]
-            months    = sc["months"]
+            months     = sc["months"]
+            principal  = sc["principal"]
             instalment = sc["instalment"]
-            pct       = sc["pct_income"]
-            is_std    = name.lower() == "standard"
+            aff_pct    = sc["aff_pct"]
+            is_viable  = sc["is_viable"]
+            risk_label = sc["risk_label"]
+            is_typical = (months == 3)   # 3-month = typical Bingongold loan
 
             card = ctk.CTkFrame(
                 section,
                 fg_color=COLORS.get("bg_card", "#FFFFFF"),
                 corner_radius=8,
-                border_width=2 if is_std else 1,
+                border_width=2 if is_typical else 1,
                 border_color=(COLORS.get("accent_green", "#276749")
-                              if is_std else COLORS.get("border", "#E2E8F0")),
+                              if is_typical
+                              else COLORS.get("border", "#E2E8F0")),
             )
             card.grid(row=1, column=i,
                       padx=(0 if i == 0 else 6, 0),
                       sticky="nsew")
 
-            if is_std:
+            # "typical" banner on 3-month card
+            if is_typical:
                 ctk.CTkLabel(
-                    card, text="recommended",
+                    card, text="✦ typical loan",
                     font=FONTS.get("caption", ("Helvetica", 10)),
                     text_color=COLORS.get("accent_green", "#276749"),
                     fg_color=COLORS.get("bg_input", "#F7FAFC"),
                     corner_radius=0,
                 ).pack(fill="x")
 
+            # Duration heading
             ctk.CTkLabel(
-                card, text=name,
-                font=FONTS.get("caption", ("Helvetica", 11)),
-                text_color=COLORS.get("text_muted", "#718096"),
+                card,
+                text=f"{months}-Month Loan",
+                font=FONTS.get("body_small", ("Helvetica", 12, "bold")),
+                text_color=COLORS.get("text_primary", "#1A202C"),
                 anchor="w",
             ).pack(anchor="w", padx=12,
-                   pady=(10 if not is_std else 6, 0))
+                   pady=(10 if not is_typical else 6, 0))
 
+            # Principal amount — large
             ctk.CTkLabel(
                 card, text=_ugx(principal),
                 font=FONTS.get("subheading", ("Helvetica", 15, "bold")),
@@ -435,35 +465,62 @@ class StatementResultCard(ctk.CTkFrame):
                 anchor="w",
             ).pack(anchor="w", padx=12, pady=(2, 0))
 
-            ctk.CTkLabel(
-                card,
-                text=f"{months} months  ·  {int(pct * 100)}% of income",
-                font=FONTS.get("caption", ("Helvetica", 11)),
-                text_color=COLORS.get("text_muted", "#718096"),
-                anchor="w",
-            ).pack(anchor="w", padx=12, pady=(2, 0))
-
+            # Monthly instalment
             ctk.CTkLabel(
                 card,
                 text=f"Instalment: {_ugx(instalment)} / mo",
-                font=FONTS.get("body_small", ("Helvetica", 12)),
+                font=FONTS.get("caption", ("Helvetica", 11)),
                 text_color=COLORS.get("text_secondary", "#4A5568"),
                 anchor="w",
-            ).pack(anchor="w", padx=12, pady=(2, 8))
+            ).pack(anchor="w", padx=12, pady=(2, 0))
 
+            # Income usage %
+            ctk.CTkLabel(
+                card,
+                text=f"{int(aff_pct * 100)}% of net income",
+                font=FONTS.get("caption", ("Helvetica", 11)),
+                text_color=COLORS.get("text_muted", "#718096"),
+                anchor="w",
+            ).pack(anchor="w", padx=12, pady=(1, 0))
+
+            # Risk badge row
+            risk_row = ctk.CTkFrame(card, fg_color="transparent")
+            risk_row.pack(anchor="w", padx=12, pady=(4, 0))
+
+            ctk.CTkLabel(
+                risk_row,
+                text=f"● {risk_label} Risk",
+                font=FONTS.get("caption", ("Helvetica", 11, "bold")),
+                text_color=_risk_color(risk_label),
+                anchor="w",
+            ).pack(side="left")
+
+            if not is_viable:
+                ctk.CTkLabel(
+                    risk_row,
+                    text="  ⚠ High repayment risk",
+                    font=FONTS.get("caption", ("Helvetica", 10)),
+                    text_color=COLORS.get("danger", "#E53E3E"),
+                    anchor="w",
+                ).pack(side="left")
+
+            # Accept button
             ctk.CTkButton(
-                card, text="Accept",
+                card, text="Accept →",
                 height=32,
                 font=FONTS.get("body_small", ("Helvetica", 12)),
                 fg_color=(COLORS.get("accent_green", "#276749")
-                          if is_std else COLORS.get("bg_input", "#F7FAFC")),
+                          if is_typical and is_viable
+                          else COLORS.get("bg_input", "#F7FAFC")),
                 hover_color=COLORS.get("accent_green_dark", "#1C4532"),
-                text_color=("#FFFFFF" if is_std
+                text_color=("#FFFFFF"
+                            if is_typical and is_viable
                             else COLORS.get("text_primary", "#1A202C")),
                 corner_radius=6,
-                command=lambda n=name, p=principal, m=months: (
-                    self.on_accept(n, p, m) if self.on_accept else None),
-            ).pack(fill="x", padx=12, pady=(0, 10))
+                command=lambda m=months, p=principal: (
+                    self.on_accept(f"{m}-month", p, m)
+                    if self.on_accept else None),
+            ).pack(fill="x", padx=12, pady=(8, 10))
 
         ctk.CTkFrame(
             self, fg_color=COLORS.get("border", "#E2E8F0"), height=1,
