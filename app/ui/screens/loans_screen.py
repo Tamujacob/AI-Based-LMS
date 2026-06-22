@@ -1,7 +1,5 @@
 """
 app/ui/screens/loans_screen.py
-────────────────────────────────
-Loans screen — redesigned form flow:
 
   1. Client search — live popup (type 2+ chars) showing name + NIN + phone.
      Selecting a client auto-fills monthly income from client record.

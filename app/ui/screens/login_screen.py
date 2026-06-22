@@ -1,7 +1,3 @@
-"""
-app/ui/screens/login_screen.py
-Bingongold Credit branded login screen.
-"""
 
 import customtkinter as ctk
 import os
