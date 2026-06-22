@@ -262,10 +262,13 @@ class StatementParser:
         result    = StatementResult(source_file=file_path,
                                     statement_type=stmt_type)
 
-        # ── Extract identity fields first ─────────────────────────────────
-        StatementParser._parse_header(raw_text, result)
-        StatementParser._extract_nin(raw_text, result)
-        StatementParser._extract_client_name(raw_text, result)
+        # ── Extract identity fields using INSTITUTION-SPECIFIC extractor ───
+        # Each institution has its own header layout (label position, name
+        # placement, period format) so a single generic regex set cannot
+        # work for all of them. See IDENTITY_EXTRACTORS dispatch table.
+        identity_fn = StatementParser._IDENTITY_EXTRACTORS.get(
+            stmt_type, StatementParser._extract_identity_generic)
+        identity_fn(raw_text, result)
 
         # ── Route to institution-specific transaction parser ───────────────
         dispatch = {
@@ -297,7 +300,21 @@ class StatementParser:
         return result
 
     # ══════════════════════════════════════════════════════════════════════════
-    # NIN extraction
+    # Identity extraction — INSTITUTION-SPECIFIC dispatch
+    # ══════════════════════════════════════════════════════════════════════════
+    #
+    # Each institution lays out client name / account number / NIN / period
+    # differently. A single generic regex set cannot reliably parse all of
+    # them — for example Equity Bank prints the client name as a bare,
+    # label-less line under the statement title, while MTN MoMo always
+    # labels it "Account holder:". Trying to force one regex set to handle
+    # both causes false matches (e.g. capturing the literal word "Number"
+    # from "Account Number" as if it were the account number value).
+    #
+    # Add a new institution by writing its own _extract_identity_<name>
+    # method and registering it in _IDENTITY_EXTRACTORS below. This keeps
+    # institutions fully isolated — fixing one institution's extractor can
+    # never silently break another's.
     # ══════════════════════════════════════════════════════════════════════════
 
     # Common words that appear in PDF headers as 14-char strings — NOT NINs
@@ -307,135 +324,253 @@ class StatementParser:
         "CLOSINGBALANCE", "OPENINGBALANCE", "AVAILABLEBALANC",
     }
 
+    # Words/phrases that are definitely not a person's name — used by every
+    # institution-specific name extractor to reject false matches.
+    _NOT_A_NAME = {
+        "EQUITY BANK", "STANBIC BANK", "CENTENARY BANK", "DFCU BANK",
+        "MTN MOBILE", "AIRTEL MONEY", "BANK OF UGANDA", "LIMITED",
+        "STATEMENT", "ACCOUNT", "BRANCH", "DETAILS", "SUMMARY",
+        "ACCOUNT STATEMENT", "TRANSACTION DETAILS", "PAYMENT REFERENCE",
+        "VALUE DATE", "CREDIT MONEY", "DEBIT MONEY", "MONEY IN", "MONEY OUT",
+    }
+
     @staticmethod
-    def _extract_nin(text: str, result: StatementResult):
-        """
-        Extract Uganda NIN from statement text using 3 tiers.
-        Tier 4 (blind header scan) removed — caused false positives like
-        "ACCOUNTNUMBER" being matched as a NIN.
+    def _is_valid_nin(token: str) -> bool:
+        t = token.upper()
+        if t in StatementParser._NIN_FALSE_POSITIVES:
+            return False
+        if len(set(t)) < 5:        # repeated-letter junk like AACCCC...
+            return False
+        return True
 
-        Tier 1 — STRICT regex: C[MF] + 8 digits + 4 alphanumeric
-        Tier 2 — LABELLED: 14-char token immediately after NIN/ID label
-        Tier 3 — CONTEXT: 14-char token near identity keywords in first 800 chars,
-                  must start with C[MF] to be accepted (reduces false positives)
+    @staticmethod
+    def _is_valid_name(raw: str) -> bool:
+        words = raw.split()
+        if len(words) < 2 or len(words) > 5:
+            return False
+        if re.search(r'\d', raw):
+            return False
+        if len(raw) <= 4:
+            return False
+        upper = raw.upper()
+        if upper in StatementParser._NOT_A_NAME:
+            return False
+        if any(n in upper for n in StatementParser._NOT_A_NAME):
+            return False
+        return True
 
-        MTN MoMo statements do NOT contain NIN — result.nin stays "".
-        """
-        def _is_valid_nin(token: str) -> bool:
-            t = token.upper()
-            if t in StatementParser._NIN_FALSE_POSITIVES:
-                return False
-            # Must not be a dictionary word repeated (AACCCC... pattern)
-            if len(set(t)) < 5:          # too few unique chars → not a real NIN
-                return False
-            return True
-
-        # Tier 1 — strict NIN pattern anywhere in document
-        m = _NIN_STRICT.search(text)
-        if m:
-            candidate = m.group(0).upper()
-            if _is_valid_nin(candidate):
-                result.nin = candidate
-                return
-
-        # Tier 2 — labelled: "NIN: AB12345678CDEF"
-        m = _NIN_LABELLED.search(text)
-        if m:
-            candidate = m.group(1).strip().upper()
-            if len(candidate) == 14 and _is_valid_nin(candidate):
-                result.nin = candidate
-                return
-
-        # Tier 3 — context scan in first 800 chars, must start with C[MF]
-        header = text[:800]
-        context_re = re.compile(
-            r'(?:nin|national\s*id|identification|id\s*no|id\s*number)'
-            r'.{0,30}?(C[MF][A-Z0-9]{12})\b',
-            re.IGNORECASE | re.DOTALL
+    # ── Equity Bank ──────────────────────────────────────────────────────────
+    #
+    # Real layout observed (per Bingongold sample statements):
+    #
+    #   Account                                    Account Number  1004102795321
+    #   Statement                                   Currency        UGX
+    #                                                Account Branch 1004
+    #   TAMUKEDDE JACOB                              Statement Date 10/06/2026
+    #   256787022284                                 Statement      09/06/2025 - 09/06/2026
+    #   JACOBTAMUKEDDE@GMAIL.COM                      Period
+    #                                                 Account Created 30/01/2023
+    #
+    # Key facts about this layout:
+    #   - Client name has NO LABEL — it is the first all-caps line that looks
+    #     like a person's name, appearing after the "Account Statement" title
+    #     and before the phone number line.
+    #   - The phone number is the line directly below the name (digits only,
+    #     9-12 digits, no other letters).
+    #   - "Account Number" is a LABEL followed by digits — but because the
+    #     PDF is a two-column key/value box, naive regex can capture the
+    #     label text itself ("Number") if the digits are pushed to a
+    #     different line by pdfplumber's text extraction. We anchor strictly
+    #     on a label immediately followed by a long digit run.
+    #   - "Statement Period" is printed as "START - END" with a literal
+    #     hyphen, both in DD/MM/YYYY format, NOT separate "from"/"to" labels.
+    #   - Equity Bank does NOT print the NIN anywhere on this statement type.
+    @staticmethod
+    def _extract_identity_equity(text: str, result: StatementResult):
+        # ── Account number ────────────────────────────────────────────────
+        # Anchor strictly: label "Account Number" followed by 6+ digits,
+        # allowing for whitespace/newlines from table-cell extraction, but
+        # requiring the captured group to be ALL DIGITS (rejects "Number").
+        m = re.search(
+            r'account\s*number\D{0,15}?(\d{6,20})',
+            text, re.IGNORECASE | re.DOTALL
         )
-        m = context_re.search(header)
         if m:
-            candidate = m.group(1).upper()
-            if _is_valid_nin(candidate):
-                result.nin = candidate
-                return
-        # Nothing found — stays "" (expected for MoMo and most image statements)
+            result.account_number = m.group(1).strip()
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # Client name extraction
-    # ══════════════════════════════════════════════════════════════════════════
+        # ── Statement period — "09/06/2025 - 09/06/2026" ────────────────
+        m = re.search(
+            r'statement\s*period\D{0,15}?'
+            r'(\d{1,2}/\d{1,2}/\d{2,4})\s*-\s*(\d{1,2}/\d{1,2}/\d{2,4})',
+            text, re.IGNORECASE | re.DOTALL
+        )
+        if m:
+            result.period_from = _parse_date(m.group(1))
+            result.period_to   = _parse_date(m.group(2))
 
+        # ── Client name — label-less, first valid name-looking ALL-CAPS line
+        # appearing in the first 500 chars of the document (header area).
+        header = text[:500]
+        for line in header.splitlines():
+            candidate = line.strip()
+            if not candidate:
+                continue
+            # Must look like a name: 2-5 words, all letters/spaces, no digits
+            if re.fullmatch(r"[A-Z][A-Z'\-]*(?:\s+[A-Z][A-Z'\-]*){1,4}", candidate):
+                if StatementParser._is_valid_name(candidate):
+                    result.client_name    = candidate.upper()
+                    result.account_holder = candidate.upper()
+                    break
+
+        # NIN is not printed on Equity Bank statements — leave as "" and
+        # let the UI show a clear "Not available on this statement type"
+        # message rather than a generic "Not found" (handled in the card).
+        result.nin = ""
+
+    # ── MTN MoMo ─────────────────────────────────────────────────────────────
+    #
+    # Layout: "Account holder: NAME" / "Wallet Number: 256XXXXXXXXX"
+    # "From Date: DD MMM YYYY" / "To Date: DD MMM YYYY"
+    # MTN MoMo never prints a NIN.
     @staticmethod
-    def _extract_client_name(text: str, result: StatementResult):
-        """
-        Extract the borrower's full name from the statement header.
+    def _extract_identity_mtn_momo(text: str, result: StatementResult):
+        m = re.search(r'account\s+holder[:\s]+([A-Z][A-Za-z\s\'\-\.]{2,50})',
+                      text, re.IGNORECASE)
+        if m:
+            candidate = re.split(
+                r'\s+(?:wallet|account|phone|from|to|date|number)',
+                m.group(1).strip(), flags=re.IGNORECASE)[0].strip()
+            if StatementParser._is_valid_name(candidate):
+                result.client_name    = candidate.upper()
+                result.account_holder = candidate.upper()
 
-        Label patterns by institution:
-          MTN MoMo   — "Account holder: JACOB TAMUKEDDE"
-          Airtel     — "Account Name: JANE NAMUTEBI"
-          Stanbic    — "Customer Name: JOHN MUKASA"
-          Equity     — "Account Name: SARAH NAKATO"
-          Centenary  — "Name: PETER SSEMAKULA"
-          DFCU       — "Account Holder: ..."
+        m = re.search(r'wallet\s*number[:\s]+([\d\s+]{9,15})',
+                      text, re.IGNORECASE)
+        if m:
+            result.account_number = m.group(1).replace(' ', '').strip()[:20]
 
-        Sets result.client_name (uppercase).
-        Falls back to result.account_holder if no label matches.
-        """
-        # Ordered from most-specific to least-specific.
-        # Each pattern captures the name portion after the label.
+        m = re.search(r'from\s+date[:\s]+(\d{1,2}\s+\w+\s+\d{4})',
+                      text, re.IGNORECASE)
+        if m:
+            result.period_from = _parse_date(m.group(1))
+        m = re.search(r'to\s+date[:\s]+(\d{1,2}\s+\w+\s+\d{4})',
+                      text, re.IGNORECASE)
+        if m:
+            result.period_to = _parse_date(m.group(1))
+
+        result.nin = ""   # MTN MoMo never prints NIN
+
+    # ── Airtel Money ─────────────────────────────────────────────────────────
+    #
+    # Layout: "Account Name: NAME" / "Mobile Number: 256XXXXXXXXX"
+    # Airtel Money never prints a NIN on the statement.
+    @staticmethod
+    def _extract_identity_airtel(text: str, result: StatementResult):
+        m = re.search(r'account\s+name[:\s]+([A-Z][A-Za-z\s\'\-\.]{2,50})',
+                      text, re.IGNORECASE)
+        if m:
+            candidate = re.split(
+                r'\s+(?:wallet|account|phone|mobile|from|to|date|number)',
+                m.group(1).strip(), flags=re.IGNORECASE)[0].strip()
+            if StatementParser._is_valid_name(candidate):
+                result.client_name    = candidate.upper()
+                result.account_holder = candidate.upper()
+
+        m = re.search(r'mobile\s*number[:\s]+([\d\s+]{9,15})',
+                      text, re.IGNORECASE)
+        if m:
+            result.account_number = m.group(1).replace(' ', '').strip()[:20]
+
+        m = re.search(r'from[:\s]+(\d{1,2}[/-]\w+[/-]\d{2,4})',
+                      text, re.IGNORECASE)
+        if m:
+            result.period_from = _parse_date(m.group(1))
+        m = re.search(r'\bto[:\s]+(\d{1,2}[/-]\w+[/-]\d{2,4})',
+                      text, re.IGNORECASE)
+        if m:
+            result.period_to = _parse_date(m.group(1))
+
+        result.nin = ""   # Airtel Money never prints NIN
+
+    # ── Generic fallback — unknown / unrecognised institutions ──────────────
+    #
+    # Used only when _detect_type() couldn't identify the institution.
+    # Best-effort: tries several common label patterns. Less reliable than
+    # the institution-specific extractors above by design — if a statement
+    # keeps landing here, it should get its own dedicated extractor once a
+    # real sample is available.
+    @staticmethod
+    def _extract_identity_generic(text: str, result: StatementResult):
         name_patterns = [
-            # Explicit full-label patterns (highest confidence)
             r'account\s+holder\s*[:\-]\s*([A-Z][A-Za-z\s\'\-\.]{2,50})',
             r'account\s+name\s*[:\-]\s*([A-Z][A-Za-z\s\'\-\.]{2,50})',
             r'customer\s+name\s*[:\-]\s*([A-Z][A-Za-z\s\'\-\.]{2,50})',
             r'name\s+of\s+account\s+holder\s*[:\-]\s*([A-Z][A-Za-z\s\'\-\.]{2,50})',
             r'account\s+owner\s*[:\-]\s*([A-Z][A-Za-z\s\'\-\.]{2,50})',
-            # Equity Bank specific: "Printed for: FIRSTNAME LASTNAME"
-            r'printed\s+for\s*[:\-]?\s*([A-Z][A-Za-z\s\'\-\.]{2,50})',
-            # Equity Bank: "Account Title: NAME"
-            r'account\s+title\s*[:\-]\s*([A-Z][A-Za-z\s\'\-\.]{2,50})',
-            # Stanbic / generic: "Client: NAME"
             r'client\s*[:\-]\s*([A-Z][A-Za-z\s\'\-\.]{2,50})',
-            # DFCU: "Account Details ... Name: ..."
-            r'(?:^|\n)\s*([A-Z]{2,}(?:\s+[A-Z]{2,}){1,4})\s*(?:\n|$)',
-            # Generic name label (lowest confidence — checked last)
             r'(?<!\w)name\s*[:\-]\s*([A-Z][A-Za-z\s\'\-\.]{2,50})',
         ]
-
-        # Words that signal the capture has gone too far
         _STOP_WORDS = re.compile(
             r'\s+(?:wallet|account|phone|mobile|from|to|date|number|'
             r'period|statement|nin|national|balance|branch|printed|title)',
             re.IGNORECASE
         )
-
-        # Words that are definitely not a person's name
-        _NOT_A_NAME = {
-            "EQUITY BANK", "STANBIC BANK", "CENTENARY BANK", "DFCU BANK",
-            "MTN MOBILE", "AIRTEL MONEY", "BANK OF UGANDA", "LIMITED",
-            "STATEMENT", "ACCOUNT", "BRANCH", "DETAILS", "SUMMARY",
-        }
-
         for pat in name_patterns:
             m = re.search(pat, text, re.IGNORECASE | re.MULTILINE)
             if m:
-                raw   = m.group(1).strip()
-                raw   = _STOP_WORDS.split(raw)[0].strip()
-                words = raw.split()
-                # Valid: ≥2 words, no digits, reasonable length, not a bank name
-                if (len(words) >= 2
-                        and not re.search(r'\d', raw)
-                        and len(raw) > 4
-                        and raw.upper() not in _NOT_A_NAME
-                        and not any(n in raw.upper() for n in _NOT_A_NAME)):
+                raw = m.group(1).strip()
+                raw = _STOP_WORDS.split(raw)[0].strip()
+                if StatementParser._is_valid_name(raw):
                     result.client_name    = raw.upper()
-                    result.account_holder = result.account_holder or raw.upper()
-                    return
+                    result.account_holder = raw.upper()
+                    break
 
-        # Fallback: use account_holder populated by _parse_header
-        if result.account_holder and not result.client_name:
-            result.client_name = result.account_holder
+        # Account number — require the captured value to be digits only,
+        # never the label text itself (fixes the "Number" false capture).
+        m = re.search(r'account\s*(?:no)?\D{0,15}?(\d{6,20})',
+                      text, re.IGNORECASE | re.DOTALL)
+        if m:
+            result.account_number = m.group(1).strip()
 
+        # Period — try "from/to" labels first, then a dash-separated range
+        m = re.search(r'from\s+date[:\s]+(\d{1,2}\s+\w+\s+\d{4})',
+                      text, re.IGNORECASE)
+        if m:
+            result.period_from = _parse_date(m.group(1))
+        m = re.search(r'to\s+date[:\s]+(\d{1,2}\s+\w+\s+\d{4})',
+                      text, re.IGNORECASE)
+        if m:
+            result.period_to = _parse_date(m.group(1))
+
+        if not result.period_from or not result.period_to:
+            m = re.search(
+                r'(\d{1,2}/\d{1,2}/\d{2,4})\s*-\s*(\d{1,2}/\d{1,2}/\d{2,4})',
+                text)
+            if m:
+                result.period_from = result.period_from or _parse_date(m.group(1))
+                result.period_to   = result.period_to   or _parse_date(m.group(2))
+
+        # NIN — attempt strict + labelled tiers only (no blind scan)
+        m = _NIN_STRICT.search(text)
+        if m and StatementParser._is_valid_nin(m.group(0)):
+            result.nin = m.group(0).upper()
+            return
+        m = _NIN_LABELLED.search(text)
+        if m:
+            candidate = m.group(1).strip().upper()
+            if len(candidate) == 14 and StatementParser._is_valid_nin(candidate):
+                result.nin = candidate
+
+    # ── Dispatch table — institution type → identity extractor ──────────────
+    _IDENTITY_EXTRACTORS = {
+        "equity":    _extract_identity_equity.__func__,
+        "mtn_momo":  _extract_identity_mtn_momo.__func__,
+        "airtel":    _extract_identity_airtel.__func__,
+        # stanbic / centenary / dfcu / bank fall through to generic until
+        # real sample statements are available to build dedicated extractors
+    }
+
+    # ── PDF / image reading ──────────────────────────────────────────────────
     # ── PDF / image reading ──────────────────────────────────────────────────
 
     @staticmethod
@@ -544,52 +679,6 @@ class StatementParser:
         if re.search(r'\b(debit|credit|balance|withdrawal|deposit|narration)\b', t):
             return "bank"
         return "unknown"
-
-    # ── Generic header parsing ───────────────────────────────────────────────
-
-    @staticmethod
-    def _parse_header(text: str, result: StatementResult):
-        # Account holder (raw — _extract_client_name refines this later)
-        for pat in [
-            r'account holder[:\s]+([A-Z][A-Z\s]{2,40})',
-            r'account name[:\s]+([A-Z][A-Z\s]{2,40})',
-            r'customer name[:\s]+([A-Z][A-Z\s]{2,40})',
-        ]:
-            m = re.search(pat, text, re.IGNORECASE)
-            if m:
-                candidate = re.split(
-                    r'\s+(wallet|account|phone|from|to|date)',
-                    m.group(1).strip(), flags=re.IGNORECASE
-                )[0].strip()
-                if len(candidate) > 3:
-                    result.account_holder = candidate
-                    break
-
-        # Account / wallet number
-        for pat in [
-            r'wallet number[:\s]+([\d\s+]+)',
-            r'account(?:\s+no)?[:\s#]+([\dA-Z\-]+)',
-            r'mobile number[:\s]+([\d+\s]+)',
-        ]:
-            m = re.search(pat, text, re.IGNORECASE)
-            if m:
-                result.account_number = m.group(1).replace(' ', '').strip()[:20]
-                break
-
-        # Statement period
-        for pat in [r'from\s+date[:\s]+(\d{1,2}\s+\w+\s+\d{4})',
-                    r'from[:\s]+(\d{1,2}[/-]\w+[/-]\d{2,4})']:
-            m = re.search(pat, text, re.IGNORECASE)
-            if m:
-                result.period_from = _parse_date(m.group(1))
-                break
-
-        for pat in [r'to\s+date[:\s]+(\d{1,2}\s+\w+\s+\d{4})',
-                    r'\bto[:\s]+(\d{1,2}[/-]\w+[/-]\d{2,4})']:
-            m = re.search(pat, text, re.IGNORECASE)
-            if m:
-                result.period_to = _parse_date(m.group(1))
-                break
 
     # ══════════════════════════════════════════════════════════════════════════
     # MTN MoMo parser
@@ -869,14 +958,45 @@ class StatementParser:
                         balance=balance, reference=ref))
 
         if not transactions:
+            logger.warning(
+                f"_parse_bank_debit_credit: no transactions from "
+                f"extract_tables() ({len(tables)} table(s) found in PDF) — "
+                f"falling back to text-regex parsing. This usually means "
+                f"pdfplumber could not detect a clean table grid for this "
+                f"statement's layout.")
             transactions = StatementParser._parse_bank_text(raw_text)
+        else:
+            logger.info(
+                f"_parse_bank_debit_credit: extracted {len(transactions)} "
+                f"transaction(s) from {len(tables)} table(s).")
 
         transactions.sort(key=lambda t: t.date)
         return transactions
 
     @staticmethod
     def _parse_bank_text(text: str):
-        """Text-regex fallback for bank statements with no table structure."""
+        """
+        Text-regex fallback for bank statements with no table structure
+        detected by pdfplumber.extract_tables().
+
+        CRITICAL FIX: the old version classified credit/debit using
+        keyword matching on the description (_classify_bank_text), which
+        DEFAULTS TO "debit" when no keyword matches. Real Equity Bank
+        transaction descriptions (e.g. "APP/MTN/256787022284/...",
+        "GOU TREASURY SINGLE ACCOUNT") contain none of the credit/debit
+        keywords, so every transaction silently defaulted to debit —
+        this is what caused 12 straight months of negative net flow on
+        a real statement that clearly had income.
+
+        New approach: this fallback should rarely run for Equity Bank,
+        since extract_tables() should detect the 6-column table directly
+        (see _parse_bank_debit_credit). If it DOES run (table detection
+        failed), we no longer guess direction from keywords. Instead we
+        log a clear warning and skip ambiguous lines rather than silently
+        mis-classifying them as debits — a wrong "no transactions found"
+        is recoverable (user is told to check the file), but a wrong
+        "all debits" silently corrupts the loan decision.
+        """
         transactions = []
         date_re   = re.compile(
             r'\b(\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4}'
@@ -884,6 +1004,8 @@ class StatementParser:
             r'|\d{4}[/\-]\d{2}[/\-]\d{2})\b'
         )
         amount_re = re.compile(r'([\d,]+(?:\.\d{2}))')
+        skipped_ambiguous = 0
+
         for line in text.splitlines():
             line = line.strip()
             if len(line) < 12:
@@ -898,15 +1020,29 @@ class StatementParser:
             dt = _parse_date(dm.group(1))
             if dt is None:
                 continue
-            desc    = amount_re.sub('', line[dm.end():]).strip()[:80]
-            tx_type = _classify_bank_text(desc)
-            amount  = (amounts[0] if len(amounts) == 1
-                       else amounts[-2] if len(amounts) >= 2 else amounts[0])
+            desc = amount_re.sub('', line[dm.end():]).strip()[:80]
+
+            # Only classify when a real keyword is present. If no keyword
+            # matches, we cannot safely guess direction — skip the line
+            # rather than silently defaulting to debit.
+            tx_type = _classify_bank_text_strict(desc)
+            if tx_type is None:
+                skipped_ambiguous += 1
+                continue
+
+            amount = (amounts[0] if len(amounts) == 1
+                      else amounts[-2] if len(amounts) >= 2 else amounts[0])
             if tx_type == "debit":
                 amount = -amount
             transactions.append(Transaction(
                 date=dt, description=desc, amount=amount, tx_type=tx_type,
                 balance=amounts[-1] if len(amounts) >= 2 else None))
+
+        if skipped_ambiguous > 0:
+            logger.warning(
+                f"_parse_bank_text: skipped {skipped_ambiguous} line(s) with "
+                f"no credit/debit keyword match — table extraction likely "
+                f"failed for this statement; transactions may be incomplete.")
         return transactions
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -1121,6 +1257,12 @@ _DEBIT_KW  = {"debit", "withdrawal", "withdraw", "transfer out", "payment",
 
 
 def _classify_bank_text(desc: str) -> str:
+    """
+    Legacy keyword classifier — DEFAULTS TO DEBIT when no keyword matches.
+    Kept only for backward compatibility with any external callers.
+    Internal code should use _classify_bank_text_strict() instead, which
+    returns None on ambiguous input rather than silently guessing.
+    """
     d = desc.lower()
     for kw in _CREDIT_KW:
         if kw in d:
@@ -1129,6 +1271,25 @@ def _classify_bank_text(desc: str) -> str:
         if kw in d:
             return "debit"
     return "debit"
+
+
+def _classify_bank_text_strict(desc: str) -> Optional[str]:
+    """
+    Returns "credit", "debit", or None if no keyword matches.
+    Used by _parse_bank_text() so ambiguous transactions are SKIPPED
+    rather than silently assumed to be debits — this was the root cause
+    of statements showing 100% negative cash flow when the real table
+    extraction failed and descriptions contained no recognisable keyword
+    (e.g. "APP/MTN/256787022284/...", "GOU TREASURY SINGLE ACCOUNT").
+    """
+    d = desc.lower()
+    for kw in _CREDIT_KW:
+        if kw in d:
+            return "credit"
+    for kw in _DEBIT_KW:
+        if kw in d:
+            return "debit"
+    return None
 
 
 # ══════════════════════════════════════════════════════════════════════════════
