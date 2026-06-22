@@ -866,27 +866,58 @@ class StatementParser:
 
     @staticmethod
     def _parse_bank_debit_credit(file_path, raw_text, tables):
+        """
+        Parses bank statement tables into Transaction objects.
+
+        FIXED BUG: Some banks (confirmed with real Equity Bank statements)
+        render each transaction as its OWN tiny table fragment — the
+        column header ("Transaction Details | Payment reference | Value
+        Date | Credit | Debit | Balance") only appears once per PAGE as a
+        separate table, never bundled with the data rows. The old version
+        required a header row to be found INSIDE each table before any of
+        its rows would be processed, so all 100+ data-only table fragments
+        were silently skipped — producing zero transactions despite the
+        PDF clearly containing data (confirmed via debug logging: Equity
+        statement showed 113 tables found, 0 transactions extracted).
+
+        NEW STRATEGY — two passes:
+          Pass 1: scan ALL tables once, try to find ONE header row anywhere
+                   in the document. If found, remember its column layout
+                   (col_map) — this becomes the layout used for every table.
+          Pass 2: for EVERY table (whether or not it has its own header),
+                   try to parse rows using that remembered col_map. A row
+                   is accepted if its date column parses as a real date —
+                   this works whether the table is a header+data block or
+                   a pure data-only fragment, since we no longer require
+                   the header to be present in the same table.
+
+          Fallback: if no header was ever found anywhere (col_map empty),
+          fall back to positional detection — Equity/Stanbic/Centenary/DFCU
+          all commonly use [description, reference, date, credit, debit,
+          balance] as the 6-column order; we try that order directly
+          against any 6-column table whose 3rd column parses as a date.
+        """
         transactions = []
+        col_map = {}
 
+        # ── Pass 1: find ONE header anywhere in the document ────────────────
         for table in tables:
-            if len(table) < 2:
-                continue
-            header_idx, col_map = None, {}
-
-            for ri, row in enumerate(table[:6]):
+            if col_map:
+                break
+            for row in table[:6]:
                 if not row:
                     continue
                 low = [str(c).lower().strip() if c else "" for c in row]
-                matches, tmp = 0, {}
+                tmp = {}
                 for ci, cell in enumerate(low):
                     if any(h in cell for h in StatementParser._DATE_HDRS) and "date" not in tmp:
-                        tmp["date"] = ci;    matches += 1
+                        tmp["date"] = ci
                     if any(h in cell for h in StatementParser._DESC_HDRS) and "desc" not in tmp:
-                        tmp["desc"] = ci;    matches += 1
+                        tmp["desc"] = ci
                     if any(h in cell for h in StatementParser._DEBIT_HDRS) and "debit" not in tmp:
-                        tmp["debit"] = ci;   matches += 1
+                        tmp["debit"] = ci
                     if any(h in cell for h in StatementParser._CREDIT_HDRS) and "credit" not in tmp:
-                        tmp["credit"] = ci;  matches += 1
+                        tmp["credit"] = ci
                     if any(h in cell for h in StatementParser._AMOUNT_HDRS) and "amount" not in tmp:
                         tmp["amount"] = ci
                     if any(h in cell for h in StatementParser._BALANCE_HDRS) and "balance" not in tmp:
@@ -895,26 +926,59 @@ class StatementParser:
                         tmp["ref"] = ci
                 has_date = "date" in tmp
                 has_amount_col = ("debit" in tmp and "credit" in tmp) or "amount" in tmp
-                if has_date and (has_amount_col or "desc" in tmp):
-                    header_idx = ri
-                    col_map    = tmp
+                if has_date and has_amount_col:
+                    col_map = tmp
                     break
 
-            if header_idx is None or "date" not in col_map:
-                continue
+        # ── Fallback: positional layout if no header found anywhere ─────────
+        # Confirmed real-world layout (Equity Bank, and structurally similar
+        # for Stanbic/Centenary/DFCU 6-column statements):
+        #   [0]=description  [1]=reference  [2]=date
+        #   [3]=credit       [4]=debit       [5]=balance
+        used_positional_fallback = False
+        if not col_map:
+            used_positional_fallback = True
+            col_map = {"desc": 0, "ref": 1, "date": 2,
+                       "credit": 3, "debit": 4, "balance": 5}
+            logger.warning(
+                "_parse_bank_debit_credit: no header row found in any table — "
+                "using positional fallback layout "
+                "[desc, ref, date, credit, debit, balance]. "
+                "If this institution uses a different column order, "
+                "transactions may be misclassified.")
 
-            for row in table[header_idx + 1:]:
+        if "date" not in col_map:
+            return []   # truly nothing usable
+
+        # ── Pass 2: parse every table's rows using the resolved col_map ──────
+        rows_seen = 0
+        rows_with_valid_date = 0
+        for table in tables:
+            for row in table:
                 if not row:
                     continue
-                date_cell = (str(row[col_map["date"]]).strip()
-                             if col_map["date"] < len(row) and row[col_map["date"]] else "")
+                rows_seen += 1
+
+                date_idx = col_map["date"]
+                if date_idx >= len(row) or not row[date_idx]:
+                    continue
+                date_cell = str(row[date_idx]).strip()
                 dt = _parse_date(date_cell)
                 if dt is None:
                     continue
+                rows_with_valid_date += 1
 
                 desc = ""
                 if "desc" in col_map and col_map["desc"] < len(row) and row[col_map["desc"]]:
                     desc = str(row[col_map["desc"]]).replace('\n', ' ').strip()
+                    # Skip rows where the "description" is actually a header
+                    # label re-appearing (defensive — handles repeated
+                    # per-page headers that DO get bundled with data on some
+                    # pages even though most aren't).
+                    if desc.lower() in ("transaction details", "narration",
+                                       "description", "particulars"):
+                        continue
+
                 ref = None
                 if "ref" in col_map and col_map["ref"] < len(row) and row[col_map["ref"]]:
                     ref = str(row[col_map["ref"]]).strip()
@@ -956,6 +1020,12 @@ class StatementParser:
                         date=dt, description=desc, amount=amount,
                         tx_type="credit" if amount > 0 else "debit",
                         balance=balance, reference=ref))
+
+        logger.info(
+            f"_parse_bank_debit_credit: scanned {rows_seen} row(s) across "
+            f"{len(tables)} table(s), {rows_with_valid_date} had a valid date, "
+            f"{len(transactions)} transaction(s) built "
+            f"(positional_fallback={used_positional_fallback}).")
 
         if not transactions:
             logger.warning(

@@ -130,12 +130,20 @@ class StatementResultCard(ctk.CTkFrame):
         id_frame.grid(row=2, column=0, sticky="ew", padx=16, pady=(10, 4))
         id_frame.columnconfigure((0, 1, 2, 3), weight=1, uniform="id")
 
+        # Equity Bank statements never print NIN — show a clearer message
+        # than "Not found" so the loan officer knows it's not a parsing
+        # failure, just not available on this statement type.
+        if r.statement_type in ("equity", "mtn_momo", "airtel") and not r.nin:
+            nin_display = "Not printed on this statement type"
+        else:
+            nin_display = r.nin or "Not found in PDF"
+
         fields = [
             ("👤  Client Name",
              r.client_name or "Not found in PDF",
              bool(r.client_name)),
             ("🪪  NIN",
-             r.nin or "Not found in PDF",
+             nin_display,
              bool(r.nin)),
             ("🏦  Account Number",
              r.account_number or "Not found in PDF",
