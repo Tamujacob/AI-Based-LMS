@@ -251,11 +251,20 @@ class ChatbotScreen(ctk.CTkFrame):
         # Not gridded yet
 
         self.statement_password_var = ctk.StringVar()
+
+        # Validate: digits only, max 4 characters (last 4 digits of loan number)
+        def _validate_pw_digits(new_value):
+            if new_value == "":
+                return True
+            return new_value.isdigit() and len(new_value) <= 4
+        _pw_validate_cmd = self.register(_validate_pw_digits)
+
         self.attachment_password_entry = ctk.CTkEntry(
             self.attachment_bar,
             textvariable=self.statement_password_var,
-            placeholder_text="Last 4 digits of loan number",
+            placeholder_text="••••",
             show="•",
+            width=70,            # small fixed width — only 4 digits needed
             fg_color=COLORS["bg_card"],
             border_color=COLORS["border"],
             text_color=COLORS["text_primary"],
@@ -263,6 +272,24 @@ class ChatbotScreen(ctk.CTkFrame):
             corner_radius=8,
             height=32,
             border_width=1,
+            justify="center",
+            validate="key",
+            validatecommand=(_pw_validate_cmd, "%P"),
+        )
+        # Not gridded yet
+
+        # Eye toggle button — show/hide the password digits
+        self._pw_visible = False
+        self.attachment_password_toggle = ctk.CTkButton(
+            self.attachment_bar,
+            text="👁",
+            width=32, height=32,
+            font=FONTS["body_small"],
+            fg_color=COLORS["bg_input"],
+            hover_color=COLORS["border"],
+            text_color=COLORS["text_secondary"],
+            corner_radius=8,
+            command=self._toggle_password_visibility,
         )
         # Not gridded yet
 
@@ -428,17 +455,23 @@ class ChatbotScreen(ctk.CTkFrame):
         self.attachment_label.configure(
             text=f"📎  {filename}  — click Send to analyse")
 
-        # Show or hide the password widgets directly inside attachment_bar
+        # Show or hide the password widgets directly inside attachment_bar.
+        # Entry stays small (fixed width, no "ew" stretch) since it only
+        # ever holds 4 digits. Eye toggle sits right next to it.
         if encrypted:
             self._pw_label.grid(row=1, column=0,
                                 padx=(12, 6), pady=(0, 8), sticky="w")
-            self.attachment_password_entry.grid(row=1, column=1, columnspan=2,
-                                                padx=(0, 12), pady=(0, 8),
-                                                sticky="ew")
+            self.attachment_password_entry.grid(row=1, column=1,
+                                                padx=(0, 6), pady=(0, 8),
+                                                sticky="w")
+            self.attachment_password_toggle.grid(row=1, column=2,
+                                                  padx=(0, 12), pady=(0, 8),
+                                                  sticky="w")
             self.after(100, self.attachment_password_entry.focus)
         else:
             self._pw_label.grid_forget()
             self.attachment_password_entry.grid_forget()
+            self.attachment_password_toggle.grid_forget()
             self.statement_password_var.set("")
 
         # Clear any stale error from a previous failed attempt
@@ -519,6 +552,10 @@ class ChatbotScreen(ctk.CTkFrame):
         self.statement_password_var.set("")
         self._pw_label.grid_forget()
         self.attachment_password_entry.grid_forget()
+        self.attachment_password_toggle.grid_forget()
+        self._pw_visible = False
+        self.attachment_password_entry.configure(show="•")
+        self.attachment_password_toggle.configure(text="👁")
         self._pw_error_label.configure(text="")
         self._pw_error_label.grid_forget()
         self.attachment_bar.grid_forget()
@@ -527,6 +564,16 @@ class ChatbotScreen(ctk.CTkFrame):
             text_color=COLORS["accent_green"],
         )
         self.input_var.set("")
+
+    def _toggle_password_visibility(self):
+        """Show/hide the password digits when the eye button is clicked."""
+        self._pw_visible = not self._pw_visible
+        if self._pw_visible:
+            self.attachment_password_entry.configure(show="")
+            self.attachment_password_toggle.configure(text="🙈")
+        else:
+            self.attachment_password_entry.configure(show="•")
+            self.attachment_password_toggle.configure(text="👁")
 
     def _parse_statement_and_respond(self, message: str):
         path = self._attached_statement
