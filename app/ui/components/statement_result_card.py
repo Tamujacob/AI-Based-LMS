@@ -1,664 +1,1448 @@
 """
-app/ui/components/statement_result_card.py
-────────────────────────────────────────────────────────────
-Renders a parsed StatementResult as a structured card inside
-the chatbot messages area.
+app/core/agents/statement_parser.py
+════════════════════════════════════════════════════════════════════════════════
+Universal Financial Statement Parser — Uganda
+AI-Based Loans Management System | Bingongold Credit
 
-v2 fixes:
-  - KPI row now shows ceiling engine values (income_used, net_flow)
-    not raw parser avg_monthly_income which could be zero
-  - recent_avg_income shown alongside 12-month avg
-  - latest_balance shown in header
-  - NIN / account number / client name displayed prominently
-  - consistency score uses active-months value from ceiling result
-  - Suggested questions moved to popup (handled in chatbot_screen.py)
+Supports: MTN MoMo · Airtel Money · Stanbic · Equity ·
+          Centenary · DFCU · Generic bank PDFs · OCR images
+
+NEW in this version:
+  - result.client_name  — full name extracted from statement header
+  - result.nin          — Uganda NIN (14 chars) extracted from PDF text
+  - StatementParser.is_encrypted(path) — public helper used by the UI
+    to decide whether to show the password field before parsing begins
+
+Uganda NIN format (14 chars, no spaces or punctuation):
+  C[MF]  — Citizen + Male/Female
+  \\d{2}  — last 2 digits of birth year
+  \\d{6}  — unique security permutation
+  [A-Z0-9]{4} — random suffix
+  Examples: CM97027102X4CU  |  CF85123456ABCD
+
+Usage:
+    result = StatementParser.parse("/path/to/statement.pdf")
+    print(result.client_name)        # "JACOB TAMUKEDDE"
+    print(result.nin)                # "CM97027102X4CU" or "" if not found
+    print(result.avg_monthly_income) # 100500.0
+    print(result.as_text())          # full human-readable summary
+
+Author : Tamukedde Jacob | Bugema University FYP | Bingongold Credit
 """
 
-import customtkinter as ctk
-from app.ui.styles.theme import COLORS, FONTS
+from __future__ import annotations
+
+import os
+import re
+import logging
+from collections import defaultdict
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import List, Optional
+
+logger = logging.getLogger(__name__)
 
 
-def _ugx(value: float) -> str:
-    return f"UGX {int(value):,}"
+# ══════════════════════════════════════════════════════════════════════════════
+# Uganda NIN regex patterns
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# STRICT  — exact 14-char NIN starting with CM or CF (most common)
+# LABELLED — any 14-char token that appears right after a NIN/ID label
+# CONTEXT  — any 14-char alphanumeric near identity keywords in the header
+
+_NIN_STRICT = re.compile(
+    r'\bC[MF]\d{8}[A-Z0-9]{4}\b',
+    re.IGNORECASE
+)
+
+_NIN_LABELLED = re.compile(
+    r'(?:NIN|national\s+id(?:entification)?\s*(?:number|no|#)?'
+    r'|id\s*(?:number|no|#))'
+    r'[^\w]{0,20}([A-Z0-9]{14})',
+    re.IGNORECASE
+)
 
 
-def _institution_label(stmt_type: str) -> str:
-    return {
-        "mtn_momo":  "MTN MoMo",
-        "airtel":    "Airtel Money",
-        "stanbic":   "Stanbic Bank",
-        "equity":    "Equity Bank",
-        "centenary": "Centenary Bank",
-        "dfcu":      "DFCU Bank",
-        "bank":      "Bank Statement",
-    }.get(stmt_type, stmt_type.replace("_", " ").title())
+# ══════════════════════════════════════════════════════════════════════════════
+# Data classes
+# ══════════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class Transaction:
+    date:        datetime
+    description: str
+    amount:      float          # positive = inflow, negative = outflow
+    tx_type:     str            # "credit" | "debit"
+    balance:     Optional[float] = None
+    reference:   Optional[str]   = None
 
 
-class StatementResultCard(ctk.CTkFrame):
+@dataclass
+class MonthlySummary:
+    month:     str              # e.g. "Apr 2026"
+    total_in:  float
+    total_out: float
+    net:       float
+    tx_count:  int
 
-    def __init__(self, parent, result, ceiling=None, on_accept=None, **kwargs):
-        super().__init__(
-            parent,
-            fg_color=COLORS.get("bg_card", "#FFFFFF"),
-            corner_radius=12,
-            border_width=1,
-            border_color=COLORS.get("border", "#E2E8F0"),
-            **kwargs,
-        )
-        self.result    = result
-        self.ceiling   = ceiling
-        self.on_accept = on_accept
-        self.columnconfigure(0, weight=1)
 
-        # Dynamic row counter — the monthly breakdown section can span a
-        # variable number of grid rows depending on how many months are
-        # present (wraps at 6 per row), so every section after it must use
-        # this counter instead of a hardcoded row number.
-        self._next_row = 0
+@dataclass
+class StatementResult:
+    source_file:          str
+    statement_type:       str   # mtn_momo|airtel|stanbic|equity|
+                                # centenary|dfcu|bank|unknown
 
-        self._build_header()
-        self._build_identity_row()   # NEW — name / NIN / account / period
-        self._build_kpi_row()
-        self._build_monthly_breakdown()
-        self._build_loan_scenarios()
-        self._build_risk_note()
+    # ── Client identity ───────────────────────────────────────────────────
+    client_name:          str   = ""   # Full name from header
+    nin:                  str   = ""   # Uganda NIN, 14 chars, or ""
+    # ─────────────────────────────────────────────────────────────────────
 
-    # ── Header ────────────────────────────────────────────────────────────────
+    account_holder:       str   = ""   # Raw account holder text
+    account_number:       str   = ""
+    period_from:          Optional[datetime] = None
+    period_to:            Optional[datetime] = None
 
-    def _build_header(self):
-        r = self.result
-        hdr = ctk.CTkFrame(self, fg_color="transparent")
-        hdr.grid(row=self._next_row, column=0, sticky="ew", padx=16, pady=(14, 4))
-        self._next_row += 1
-        hdr.columnconfigure(1, weight=1)
+    transactions:         List[Transaction]    = field(default_factory=list)
+    monthly_summaries:    List[MonthlySummary] = field(default_factory=list)
 
-        icon = ctk.CTkLabel(
-            hdr, text="📄",
-            width=40, height=40,
-            fg_color=COLORS.get("bg_input", "#F7FAFC"),
-            corner_radius=20,
-            font=("Helvetica", 18),
-        )
-        icon.grid(row=0, column=0, rowspan=2, padx=(0, 12))
+    total_credits:        float = 0.0
+    total_debits:         float = 0.0
+    net_cash_flow:        float = 0.0
+    avg_monthly_income:   float = 0.0   # 12-month average (no outlier stripping)
+    avg_monthly_expense:  float = 0.0
+    avg_monthly_net:      float = 0.0
+    net_monthly_flow:     float = 0.0   # best income signal sent to ceiling engine
+    recent_avg_income:    float = 0.0   # 3-month trailing average (recency-weighted)
+    latest_balance:       float = 0.0   # last known account balance from transactions
+    months_covered:       int   = 0
+    income_consistency:   float = 0.0
+    largest_credit:       float = 0.0
+    largest_debit:        float = 0.0
+    has_salary_pattern:   bool  = False
+    has_irregular_income: bool  = False
+    parse_warnings:       List[str] = field(default_factory=list)
 
-        # Institution + transaction count
-        ctk.CTkLabel(
-            hdr,
-            text=_institution_label(r.statement_type),
-            font=FONTS.get("subheading", ("Helvetica", 14, "bold")),
-            text_color=COLORS.get("text_primary", "#1A202C"),
-            anchor="w",
-        ).grid(row=0, column=1, sticky="w")
+    def as_text(self) -> str:
+        lines = [
+            f"Statement Type:        {self.statement_type.replace('_', ' ').title()}",
+            f"Client Name:           {self.client_name or 'Not found'}",
+            f"NIN:                   {self.nin or 'Not found in PDF'}",
+            f"Account Number:        {self.account_number or 'N/A'}",
+        ]
+        if self.period_from and self.period_to:
+            lines.append(
+                f"Period:                "
+                f"{self.period_from.strftime('%d %b %Y')} – "
+                f"{self.period_to.strftime('%d %b %Y')}"
+            )
+        lines += [
+            f"Months Covered:        {self.months_covered}",
+            f"Total Transactions:    {len(self.transactions)}",
+            f"Total Credits (In):    UGX {self.total_credits:,.0f}",
+            f"Total Debits (Out):    UGX {self.total_debits:,.0f}",
+            f"Net Cash Flow:         UGX {self.net_cash_flow:,.0f}",
+            f"Avg Monthly Income:    UGX {self.avg_monthly_income:,.0f}",
+            f"Recent 3-Month Income: UGX {self.recent_avg_income:,.0f}",
+            f"Latest Balance:        UGX {self.latest_balance:,.0f}",
+            f"Avg Monthly Expense:   UGX {self.avg_monthly_expense:,.0f}",
+            f"Avg Monthly Net:       UGX {self.avg_monthly_net:,.0f}",
+            f"Income Consistency:    {self.income_consistency:.0%}",
+            f"Salary Pattern:        {'Yes' if self.has_salary_pattern else 'No'}",
+            f"Largest Credit:        UGX {self.largest_credit:,.0f}",
+            f"Largest Debit:         UGX {self.largest_debit:,.0f}",
+        ]
+        if self.parse_warnings:
+            lines.append(f"Warnings:              {'; '.join(self.parse_warnings)}")
+        return "\n".join(lines)
 
-        ctk.CTkLabel(
-            hdr,
-            text=f"{len(r.transactions)} transactions  ·  {r.months_covered} months",
-            font=FONTS.get("caption", ("Helvetica", 11)),
-            text_color=COLORS.get("text_muted", "#718096"),
-            anchor="w",
-        ).grid(row=1, column=1, sticky="w")
 
-        # Consistency badge — use ceiling income_consistency if available
-        cons = r.income_consistency
-        cons_pct   = round(cons * 100)
-        cons_color = (COLORS.get("accent_green", "#276749")
-                      if cons >= 0.6
-                      else COLORS.get("warning", "#D69E2E"))
+# ══════════════════════════════════════════════════════════════════════════════
+# Main parser class
+# ══════════════════════════════════════════════════════════════════════════════
 
-        ctk.CTkLabel(
-            hdr,
-            text=f"{cons_pct}% consistent",
-            font=FONTS.get("caption", ("Helvetica", 11)),
-            text_color="#FFFFFF",
-            fg_color=cons_color,
-            corner_radius=8,
-            padx=10, pady=3,
-        ).grid(row=0, column=2, rowspan=2, sticky="e", padx=(8, 0))
+class StatementParser:
 
-        ctk.CTkFrame(
-            self, fg_color=COLORS.get("border", "#E2E8F0"), height=1,
-        ).grid(row=self._next_row, column=0, sticky="ew", padx=16)
-        self._next_row += 1
+    # ── Public encryption check (used by the UI before parsing) ─────────────
 
-    # ── Identity row — name / NIN / account / period ─────────────────────────
-
-    def _build_identity_row(self):
+    @staticmethod
+    def is_encrypted(file_path: str) -> bool:
         """
-        Prominent display of client identity fields extracted from the PDF.
-        Shows all fields we have; greys out / labels missing ones clearly
-        so the loan officer knows what to fill manually.
+        Returns True if *file_path* is a password-protected PDF.
+
+        Called by the chatbot screen immediately after the user picks a file
+        so the UI can decide whether to show the password field — without
+        waiting until parse() is called.
+
+        Returns False for:
+          - Image files (never encrypted via PDF password)
+          - Non-existent files
+          - Unencrypted PDFs
+          - Any file that is not a PDF
         """
-        r = self.result
+        if not os.path.exists(file_path):
+            return False
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext not in (".pdf",):
+            return False
 
-        id_frame = ctk.CTkFrame(
-            self,
-            fg_color=COLORS.get("bg_input", "#F7FAFC"),
-            corner_radius=8,
-        )
-        id_frame.grid(row=self._next_row, column=0, sticky="ew", padx=16, pady=(10, 4))
-        self._next_row += 1
-        id_frame.columnconfigure((0, 1, 2, 3), weight=1, uniform="id")
+        # Try pdfplumber first — if it opens without exception, not encrypted
+        try:
+            import pdfplumber
+            with pdfplumber.open(file_path) as pdf:
+                _ = pdf.pages   # force load; raises on encrypted PDF
+            return False
+        except Exception:
+            pass
 
-        # Equity Bank statements never print NIN — show a clearer message
-        # than "Not found" so the loan officer knows it's not a parsing
-        # failure, just not available on this statement type.
-        if r.statement_type in ("equity", "mtn_momo", "airtel") and not r.nin:
-            nin_display = "Not printed on this statement type"
+        # Fallback to pypdf for a definitive answer
+        try:
+            from pypdf import PdfReader
+            reader = PdfReader(file_path)
+            return reader.is_encrypted
+        except Exception:
+            # If we can't open it at all, treat as encrypted so the user
+            # is given the chance to provide a password.
+            return True
+
+    # ── Entry point ──────────────────────────────────────────────────────────
+
+    @staticmethod
+    def parse(file_path: str, password: str = None) -> StatementResult:
+        """
+        Parse any Uganda bank / mobile money statement PDF or image.
+        Auto-detects institution and extracts client_name, nin, and
+        full transaction + monthly summary data.
+
+        Args:
+            file_path: Path to the statement file (PDF, image, etc.)
+            password: Password for encrypted PDFs.
+                      For Ugandan bank statements this is typically the
+                      last 4 digits of the account/loan number.
+        """
+        if not os.path.exists(file_path):
+            r = StatementResult(source_file=file_path, statement_type="unknown")
+            r.parse_warnings.append(f"File not found: {file_path}")
+            return r
+
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext == ".pdf":
+            raw_text, tables = StatementParser._read_pdf(file_path, password=password)
+        elif ext in (".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp"):
+            raw_text = StatementParser._ocr_image(file_path)
+            tables   = []
         else:
-            nin_display = r.nin or "Not found in PDF"
+            r = StatementResult(source_file=file_path, statement_type="unknown")
+            r.parse_warnings.append(f"Unsupported file type: {ext}")
+            return r
 
-        fields = [
-            ("👤  Client Name",
-             r.client_name or "Not found in PDF",
-             bool(r.client_name)),
-            ("🪪  NIN",
-             nin_display,
-             bool(r.nin)),
-            ("🏦  Account Number",
-             r.account_number or "Not found in PDF",
-             bool(r.account_number)),
-            ("📅  Period",
-             (f"{r.period_from.strftime('%b %Y')} – {r.period_to.strftime('%b %Y')}"
-              if r.period_from and r.period_to else "Not found in PDF"),
-             bool(r.period_from and r.period_to)),
+        if not raw_text.strip():
+            r = StatementResult(source_file=file_path, statement_type="unknown")
+            if StatementParser.is_encrypted(file_path):
+                if password:
+                    # Had a password but still no text → wrong password
+                    r.parse_warnings.append(
+                        "No text extracted. The provided password is incorrect. "
+                        "Please enter the last 4 digits of the loan number."
+                    )
+                else:
+                    # Encrypted but no password given
+                    r.parse_warnings.append(
+                        "No text extracted. This PDF is password-protected. "
+                        "Enter the last 4 digits of the loan number as the password."
+                    )
+            else:
+                r.parse_warnings.append(
+                    "No text extracted. Ensure pdfplumber is installed and "
+                    "the PDF is not corrupted."
+                )
+            return r
+
+        stmt_type = StatementParser._detect_type(raw_text)
+        result    = StatementResult(source_file=file_path,
+                                    statement_type=stmt_type)
+
+        # ── Extract identity fields using INSTITUTION-SPECIFIC extractor ───
+        # Each institution has its own header layout (label position, name
+        # placement, period format) so a single generic regex set cannot
+        # work for all of them. See IDENTITY_EXTRACTORS dispatch table.
+        identity_fn = StatementParser._IDENTITY_EXTRACTORS.get(
+            stmt_type, StatementParser._extract_identity_generic)
+        identity_fn(raw_text, result)
+
+        # ── LLM fallback for any identity fields regex still missed ────────
+        # Only triggers when client_name OR account_number is missing after
+        # the regex extractor ran — these are the two fields most likely to
+        # break on a layout variant we haven't seen. This costs one Groq API
+        # call only on a regex miss; normal statements with working regex
+        # never trigger it. NIN is excluded from the trigger condition since
+        # many institutions legitimately never print it (that's not a
+        # parsing failure, so it shouldn't burn an API call every time).
+        if not result.client_name or not result.account_number:
+            try:
+                from app.core.agents.ai_core import AICore
+                header_chunk = raw_text[:1500]
+                fields = AICore.extract_identity_fields(header_chunk)
+
+                if not result.client_name and fields.get("client_name"):
+                    candidate = fields["client_name"].strip().upper()
+                    if StatementParser._is_valid_name(candidate):
+                        result.client_name    = candidate
+                        result.account_holder = candidate
+
+                if not result.account_number and fields.get("account_number"):
+                    digits = re.sub(r"\D", "", str(fields["account_number"]))
+                    if len(digits) >= 6:
+                        result.account_number = digits
+
+                if not result.nin and fields.get("nin"):
+                    candidate = str(fields["nin"]).strip().upper()
+                    if len(candidate) == 14 and StatementParser._is_valid_nin(candidate):
+                        result.nin = candidate
+
+                if not result.period_from and fields.get("period_from"):
+                    parsed = _parse_date(str(fields["period_from"]))
+                    if parsed:
+                        result.period_from = parsed
+
+                if not result.period_to and fields.get("period_to"):
+                    parsed = _parse_date(str(fields["period_to"]))
+                    if parsed:
+                        result.period_to = parsed
+
+                if result.client_name or result.account_number:
+                    logger.info(
+                        "Identity extraction: LLM fallback recovered "
+                        f"{'name ' if fields.get('client_name') else ''}"
+                        f"{'account_number ' if fields.get('account_number') else ''}"
+                        "after regex extractor found nothing.")
+            except Exception as e:
+                logger.warning(f"LLM identity fallback failed: {e}")
+                # Fail silently — UI will show "Not found in PDF" as before
+
+        # ── Route to institution-specific transaction parser ───────────────
+        dispatch = {
+            "mtn_momo":  StatementParser._parse_mtn_momo,
+            "airtel":    StatementParser._parse_airtel,
+            "stanbic":   StatementParser._parse_bank_debit_credit,
+            "equity":    StatementParser._parse_bank_debit_credit,
+            "centenary": StatementParser._parse_bank_debit_credit,
+            "dfcu":      StatementParser._parse_bank_debit_credit,
+            "bank":      StatementParser._parse_bank_debit_credit,
+        }
+        try:
+            parser_fn    = dispatch.get(stmt_type,
+                                        StatementParser._parse_bank_debit_credit)
+            transactions = parser_fn(file_path, raw_text, tables)
+        except Exception as exc:
+            logger.exception("Transaction parsing failed")
+            result.parse_warnings.append(f"Parsing error: {exc}")
+            transactions = []
+
+        if not transactions:
+            result.parse_warnings.append(
+                "No transactions extracted. "
+                "The PDF may use an unsupported layout.")
+            return result
+
+        result.transactions = transactions
+        StatementParser._build_summary(result, raw_text)
+        return result
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # Identity extraction — INSTITUTION-SPECIFIC dispatch
+    # ══════════════════════════════════════════════════════════════════════════
+    #
+    # Each institution lays out client name / account number / NIN / period
+    # differently. A single generic regex set cannot reliably parse all of
+    # them — for example Equity Bank prints the client name as a bare,
+    # label-less line under the statement title, while MTN MoMo always
+    # labels it "Account holder:". Trying to force one regex set to handle
+    # both causes false matches (e.g. capturing the literal word "Number"
+    # from "Account Number" as if it were the account number value).
+    #
+    # Add a new institution by writing its own _extract_identity_<name>
+    # method and registering it in _IDENTITY_EXTRACTORS below. This keeps
+    # institutions fully isolated — fixing one institution's extractor can
+    # never silently break another's.
+    # ══════════════════════════════════════════════════════════════════════════
+
+    # Common words that appear in PDF headers as 14-char strings — NOT NINs
+    _NIN_FALSE_POSITIVES = {
+        "ACCOUNTNUMBER", "AACCOUNTUMBER", "STATEMENTDATE",
+        "AACCCCOOOUUNNTT", "CUSTOMERDETAIL", "BRANCHADDRESS",
+        "CLOSINGBALANCE", "OPENINGBALANCE", "AVAILABLEBALANC",
+    }
+
+    # Words/phrases that are definitely not a person's name — used by every
+    # institution-specific name extractor to reject false matches.
+    _NOT_A_NAME = {
+        "EQUITY BANK", "STANBIC BANK", "CENTENARY BANK", "DFCU BANK",
+        "MTN MOBILE", "AIRTEL MONEY", "BANK OF UGANDA", "LIMITED",
+        "STATEMENT", "ACCOUNT", "BRANCH", "DETAILS", "SUMMARY",
+        "ACCOUNT STATEMENT", "TRANSACTION DETAILS", "PAYMENT REFERENCE",
+        "VALUE DATE", "CREDIT MONEY", "DEBIT MONEY", "MONEY IN", "MONEY OUT",
+    }
+
+    @staticmethod
+    def _is_valid_nin(token: str) -> bool:
+        t = token.upper()
+        if t in StatementParser._NIN_FALSE_POSITIVES:
+            return False
+        if len(set(t)) < 5:        # repeated-letter junk like AACCCC...
+            return False
+        return True
+
+    @staticmethod
+    def _is_valid_name(raw: str) -> bool:
+        words = raw.split()
+        if len(words) < 2 or len(words) > 5:
+            return False
+        if re.search(r'\d', raw):
+            return False
+        if len(raw) <= 4:
+            return False
+        upper = raw.upper()
+        if upper in StatementParser._NOT_A_NAME:
+            return False
+        if any(n in upper for n in StatementParser._NOT_A_NAME):
+            return False
+        return True
+
+    # ── Equity Bank ──────────────────────────────────────────────────────────
+    #
+    # Real layout observed (per Bingongold sample statements):
+    #
+    #   Account                                    Account Number  1004102795321
+    #   Statement                                   Currency        UGX
+    #                                                Account Branch 1004
+    #   TAMUKEDDE JACOB                              Statement Date 10/06/2026
+    #   256787022284                                 Statement      09/06/2025 - 09/06/2026
+    #   JACOBTAMUKEDDE@GMAIL.COM                      Period
+    #                                                 Account Created 30/01/2023
+    #
+    # Key facts about this layout:
+    #   - Client name has NO LABEL — it is the first all-caps line that looks
+    #     like a person's name, appearing after the "Account Statement" title
+    #     and before the phone number line.
+    #   - The phone number is the line directly below the name (digits only,
+    #     9-12 digits, no other letters).
+    #   - "Account Number" is a LABEL followed by digits — but because the
+    #     PDF is a two-column key/value box, naive regex can capture the
+    #     label text itself ("Number") if the digits are pushed to a
+    #     different line by pdfplumber's text extraction. We anchor strictly
+    #     on a label immediately followed by a long digit run.
+    #   - "Statement Period" is printed as "START - END" with a literal
+    #     hyphen, both in DD/MM/YYYY format, NOT separate "from"/"to" labels.
+    #   - Equity Bank does NOT print the NIN anywhere on this statement type.
+    @staticmethod
+    def _extract_identity_equity(text: str, result: StatementResult):
+        # ── Account number ────────────────────────────────────────────────
+        # Anchor strictly: label "Account Number" followed by 6+ digits,
+        # allowing for whitespace/newlines from table-cell extraction, but
+        # requiring the captured group to be ALL DIGITS (rejects "Number").
+        m = re.search(
+            r'account\s*number\D{0,15}?(\d{6,20})',
+            text, re.IGNORECASE | re.DOTALL
+        )
+        if m:
+            result.account_number = m.group(1).strip()
+
+        # ── Statement period — "09/06/2025 - 09/06/2026" ────────────────
+        m = re.search(
+            r'statement\s*period\D{0,15}?'
+            r'(\d{1,2}/\d{1,2}/\d{2,4})\s*-\s*(\d{1,2}/\d{1,2}/\d{2,4})',
+            text, re.IGNORECASE | re.DOTALL
+        )
+        if m:
+            result.period_from = _parse_date(m.group(1))
+            result.period_to   = _parse_date(m.group(2))
+
+        # ── Client name — label-less, first valid name-looking ALL-CAPS line
+        # appearing in the first 500 chars of the document (header area).
+        header = text[:500]
+        for line in header.splitlines():
+            candidate = line.strip()
+            if not candidate:
+                continue
+            # Must look like a name: 2-5 words, all letters/spaces, no digits
+            if re.fullmatch(r"[A-Z][A-Z'\-]*(?:\s+[A-Z][A-Z'\-]*){1,4}", candidate):
+                if StatementParser._is_valid_name(candidate):
+                    result.client_name    = candidate.upper()
+                    result.account_holder = candidate.upper()
+                    break
+
+        # NIN is not printed on Equity Bank statements — leave as "" and
+        # let the UI show a clear "Not available on this statement type"
+        # message rather than a generic "Not found" (handled in the card).
+        result.nin = ""
+
+    # ── MTN MoMo ─────────────────────────────────────────────────────────────
+    #
+    # Layout: "Account holder: NAME" / "Wallet Number: 256XXXXXXXXX"
+    # "From Date: DD MMM YYYY" / "To Date: DD MMM YYYY"
+    # MTN MoMo never prints a NIN.
+    @staticmethod
+    def _extract_identity_mtn_momo(text: str, result: StatementResult):
+        m = re.search(r'account\s+holder[:\s]+([A-Z][A-Za-z\s\'\-\.]{2,50})',
+                      text, re.IGNORECASE)
+        if m:
+            candidate = re.split(
+                r'\s+(?:wallet|account|phone|from|to|date|number)',
+                m.group(1).strip(), flags=re.IGNORECASE)[0].strip()
+            if StatementParser._is_valid_name(candidate):
+                result.client_name    = candidate.upper()
+                result.account_holder = candidate.upper()
+
+        m = re.search(r'wallet\s*number[:\s]+([\d\s+]{9,15})',
+                      text, re.IGNORECASE)
+        if m:
+            result.account_number = m.group(1).replace(' ', '').strip()[:20]
+
+        m = re.search(r'from\s+date[:\s]+(\d{1,2}\s+\w+\s+\d{4})',
+                      text, re.IGNORECASE)
+        if m:
+            result.period_from = _parse_date(m.group(1))
+        m = re.search(r'to\s+date[:\s]+(\d{1,2}\s+\w+\s+\d{4})',
+                      text, re.IGNORECASE)
+        if m:
+            result.period_to = _parse_date(m.group(1))
+
+        result.nin = ""   # MTN MoMo never prints NIN
+
+    # ── Airtel Money ─────────────────────────────────────────────────────────
+    #
+    # Layout: "Account Name: NAME" / "Mobile Number: 256XXXXXXXXX"
+    # Airtel Money never prints a NIN on the statement.
+    @staticmethod
+    def _extract_identity_airtel(text: str, result: StatementResult):
+        m = re.search(r'account\s+name[:\s]+([A-Z][A-Za-z\s\'\-\.]{2,50})',
+                      text, re.IGNORECASE)
+        if m:
+            candidate = re.split(
+                r'\s+(?:wallet|account|phone|mobile|from|to|date|number)',
+                m.group(1).strip(), flags=re.IGNORECASE)[0].strip()
+            if StatementParser._is_valid_name(candidate):
+                result.client_name    = candidate.upper()
+                result.account_holder = candidate.upper()
+
+        m = re.search(r'mobile\s*number[:\s]+([\d\s+]{9,15})',
+                      text, re.IGNORECASE)
+        if m:
+            result.account_number = m.group(1).replace(' ', '').strip()[:20]
+
+        m = re.search(r'from[:\s]+(\d{1,2}[/-]\w+[/-]\d{2,4})',
+                      text, re.IGNORECASE)
+        if m:
+            result.period_from = _parse_date(m.group(1))
+        m = re.search(r'\bto[:\s]+(\d{1,2}[/-]\w+[/-]\d{2,4})',
+                      text, re.IGNORECASE)
+        if m:
+            result.period_to = _parse_date(m.group(1))
+
+        result.nin = ""   # Airtel Money never prints NIN
+
+    # ── Generic fallback — unknown / unrecognised institutions ──────────────
+    #
+    # Used only when _detect_type() couldn't identify the institution.
+    # Best-effort: tries several common label patterns. Less reliable than
+    # the institution-specific extractors above by design — if a statement
+    # keeps landing here, it should get its own dedicated extractor once a
+    # real sample is available.
+    @staticmethod
+    def _extract_identity_generic(text: str, result: StatementResult):
+        name_patterns = [
+            r'account\s+holder\s*[:\-]\s*([A-Z][A-Za-z\s\'\-\.]{2,50})',
+            r'account\s+name\s*[:\-]\s*([A-Z][A-Za-z\s\'\-\.]{2,50})',
+            r'customer\s+name\s*[:\-]\s*([A-Z][A-Za-z\s\'\-\.]{2,50})',
+            r'name\s+of\s+account\s+holder\s*[:\-]\s*([A-Z][A-Za-z\s\'\-\.]{2,50})',
+            r'account\s+owner\s*[:\-]\s*([A-Z][A-Za-z\s\'\-\.]{2,50})',
+            r'client\s*[:\-]\s*([A-Z][A-Za-z\s\'\-\.]{2,50})',
+            r'(?<!\w)name\s*[:\-]\s*([A-Z][A-Za-z\s\'\-\.]{2,50})',
+        ]
+        _STOP_WORDS = re.compile(
+            r'\s+(?:wallet|account|phone|mobile|from|to|date|number|'
+            r'period|statement|nin|national|balance|branch|printed|title)',
+            re.IGNORECASE
+        )
+        for pat in name_patterns:
+            m = re.search(pat, text, re.IGNORECASE | re.MULTILINE)
+            if m:
+                raw = m.group(1).strip()
+                raw = _STOP_WORDS.split(raw)[0].strip()
+                if StatementParser._is_valid_name(raw):
+                    result.client_name    = raw.upper()
+                    result.account_holder = raw.upper()
+                    break
+
+        # Account number — require the captured value to be digits only,
+        # never the label text itself (fixes the "Number" false capture).
+        m = re.search(r'account\s*(?:no)?\D{0,15}?(\d{6,20})',
+                      text, re.IGNORECASE | re.DOTALL)
+        if m:
+            result.account_number = m.group(1).strip()
+
+        # Period — try "from/to" labels first, then a dash-separated range
+        m = re.search(r'from\s+date[:\s]+(\d{1,2}\s+\w+\s+\d{4})',
+                      text, re.IGNORECASE)
+        if m:
+            result.period_from = _parse_date(m.group(1))
+        m = re.search(r'to\s+date[:\s]+(\d{1,2}\s+\w+\s+\d{4})',
+                      text, re.IGNORECASE)
+        if m:
+            result.period_to = _parse_date(m.group(1))
+
+        if not result.period_from or not result.period_to:
+            m = re.search(
+                r'(\d{1,2}/\d{1,2}/\d{2,4})\s*-\s*(\d{1,2}/\d{1,2}/\d{2,4})',
+                text)
+            if m:
+                result.period_from = result.period_from or _parse_date(m.group(1))
+                result.period_to   = result.period_to   or _parse_date(m.group(2))
+
+        # NIN — attempt strict + labelled tiers only (no blind scan)
+        m = _NIN_STRICT.search(text)
+        if m and StatementParser._is_valid_nin(m.group(0)):
+            result.nin = m.group(0).upper()
+            return
+        m = _NIN_LABELLED.search(text)
+        if m:
+            candidate = m.group(1).strip().upper()
+            if len(candidate) == 14 and StatementParser._is_valid_nin(candidate):
+                result.nin = candidate
+
+    # ── Dispatch table — institution type → identity extractor ──────────────
+    _IDENTITY_EXTRACTORS = {
+        "equity":    _extract_identity_equity.__func__,
+        "mtn_momo":  _extract_identity_mtn_momo.__func__,
+        "airtel":    _extract_identity_airtel.__func__,
+        # stanbic / centenary / dfcu / bank fall through to generic until
+        # real sample statements are available to build dedicated extractors
+    }
+
+    # ── PDF / image reading ──────────────────────────────────────────────────
+    # ── PDF / image reading ──────────────────────────────────────────────────
+
+    @staticmethod
+    def _read_pdf(path: str, password: str = None):
+        """Returns (full_text, list_of_tables). Supports password-protected PDFs."""
+        try:
+            import pdfplumber
+        except ImportError:
+            return StatementParser._read_pdf_fallback(path, password=password), []
+
+        try:
+            all_text, all_tables = [], []
+            open_kwargs = {}
+            if password:
+                open_kwargs["password"] = password
+
+            with pdfplumber.open(path, **open_kwargs) as pdf:
+                for page in pdf.pages:
+                    all_text.append(page.extract_text() or "")
+                    for tbl in page.extract_tables():
+                        all_tables.append(tbl)
+
+            text = "\n".join(all_text)
+            if text.strip():
+                return text, all_tables
+            return "", []
+        except Exception as e:
+            logger.warning(f"pdfplumber read error for {path}: {e}")
+            return StatementParser._read_pdf_fallback(path, password=password), []
+
+    @staticmethod
+    def _read_pdf_using_pypdf(path: str, password: str = None):
+        try:
+            from pypdf import PdfReader
+            reader = PdfReader(path)
+
+            if reader.is_encrypted:
+                if not password:
+                    logger.warning(f"Encrypted PDF requires a password: {path}")
+                    return "", []
+                result = reader.decrypt(password)
+                if result == 0:
+                    logger.warning(f"Password decryption failed for {path}")
+                    return "", []
+
+            all_text = []
+            for page in reader.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    all_text.append(page_text)
+            return "\n".join(all_text), []
+        except Exception as e:
+            logger.warning(f"pypdf read error for {path}: {e}")
+            return "", []
+
+    @staticmethod
+    def _read_pdf_fallback(path: str, password: str = None) -> str:
+        try:
+            from pypdf import PdfReader
+            reader = PdfReader(path)
+
+            if reader.is_encrypted:
+                if not password:
+                    logger.warning(f"Encrypted PDF requires a password: {path}")
+                    return ""
+                result = reader.decrypt(password)
+                if result == 0:
+                    logger.warning(f"Password decryption failed for {path}")
+                    return ""
+
+            return "\n".join(p.extract_text() or ""
+                             for p in reader.pages)
+        except Exception as e:
+            logger.warning(f"PDF fallback read error: {e}")
+            return ""
+
+    @staticmethod
+    def _ocr_image(path: str) -> str:
+        try:
+            import pytesseract
+            from PIL import Image
+            return pytesseract.image_to_string(Image.open(path), lang="eng")
+        except Exception:
+            return ""
+
+    # ── Institution detection ────────────────────────────────────────────────
+
+    @staticmethod
+    def _detect_type(text: str) -> str:
+        t = text.lower()
+        if any(k in t for k in ["mtn mobile money", "mtn momo",
+                                  "mtn uganda limited", "mtnu mobile money",
+                                  "wallet number"]):
+            return "mtn_momo"
+        if any(k in t for k in ["airtel money", "airtel uganda",
+                                  "airtel networks"]):
+            return "airtel"
+        if "stanbic" in t:
+            return "stanbic"
+        if "equity bank" in t or "equity b2c" in t:
+            return "equity"
+        if "centenary" in t:
+            return "centenary"
+        if "dfcu" in t:
+            return "dfcu"
+        if re.search(r'\b(debit|credit|balance|withdrawal|deposit|narration)\b', t):
+            return "bank"
+        return "unknown"
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # MTN MoMo parser
+    # ══════════════════════════════════════════════════════════════════════════
+
+    _MTN_DATE_RE   = re.compile(r'(\d{1,2}\s+\w{3}\s+\d{4}\s+\d{2}:\d{2})')
+    _MTN_AMOUNT_RE = re.compile(r'([+\-][\d,]+(?:\.\d+)?)')
+    _MTN_DEBIT_TYPES  = {"CASH OUT", "DEBIT", "PAYMENT", "PAKAPAKA",
+                         "INTERNET BUNDLE", "INTERNET", "VOICE BUNDLE",
+                         "SMS BUNDLE", "AIRTIME", "BUNDLE"}
+
+    @staticmethod
+    def _parse_mtn_momo(file_path, raw_text, tables):
+        transactions, seen = [], set()
+
+        for table in tables:
+            for row in table:
+                if not row or not row[0]:
+                    continue
+                cell0 = str(row[0])
+                if "Date" in cell0 and ("Time" in cell0 or "Payment" in cell0):
+                    continue
+
+                amt_col = None
+                for ci in [4, 3, 5]:
+                    if (len(row) > ci and row[ci] is not None
+                            and StatementParser._MTN_AMOUNT_RE.match(
+                                str(row[ci]).strip())):
+                        amt_col = ci
+                        break
+
+                if amt_col is not None:
+                    dm = StatementParser._MTN_DATE_RE.search(cell0)
+                    if not dm:
+                        continue
+                    dt = _parse_datetime(dm.group(1))
+                    if dt is None:
+                        continue
+                    try:
+                        amount = float(str(row[amt_col]).replace(',', '').strip())
+                    except ValueError:
+                        continue
+                    if abs(amount) < 100:
+                        continue
+                    ref   = str(row[5]).strip() if len(row) > 5 and row[5] else ''
+                    ptype = (str(row[1]).replace('\n', ' ').strip()
+                             if row[1] else '')
+                    if ref and ref in seen:
+                        continue
+                    if ref:
+                        seen.add(ref)
+                    transactions.append(Transaction(
+                        date=dt, description=ptype, amount=amount,
+                        tx_type="credit" if amount > 0 else "debit",
+                        reference=ref or None))
+                    continue
+
+                if all(c is None for c in (row[1:] if len(row) > 1 else [])):
+                    dm = StatementParser._MTN_DATE_RE.search(cell0)
+                    if not dm:
+                        continue
+                    dt = _parse_datetime(dm.group(1))
+                    if dt is None:
+                        continue
+                    post = cell0[dm.end():]
+                    am   = StatementParser._MTN_AMOUNT_RE.search(post)
+                    if not am:
+                        continue
+                    try:
+                        amount = float(am.group(1).replace(',', ''))
+                    except ValueError:
+                        continue
+                    if abs(amount) < 100:
+                        continue
+                    tokens = post[:am.start()].strip().split()
+                    ptype  = ' '.join(tokens[:2]).upper() if tokens else 'UNKNOWN'
+                    if not am.group(1).startswith(('+', '-')):
+                        amount = (-abs(amount)
+                                  if any(k in ptype
+                                         for k in StatementParser._MTN_DEBIT_TYPES)
+                                  else abs(amount))
+                    transactions.append(Transaction(
+                        date=dt, description=ptype, amount=amount,
+                        tx_type="credit" if amount > 0 else "debit"))
+
+        transactions.sort(key=lambda t: t.date)
+        return transactions
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # Airtel Money parser
+    # ══════════════════════════════════════════════════════════════════════════
+
+    _AIRTEL_CREDIT = {"withdraw money", "money received", "receive money",
+                      "c2c", "cashin", "cash in", "incoming", "reversal",
+                      "top up", "topup"}
+    _AIRTEL_DEBIT  = {"deposit money", "money sent", "send money", "payment",
+                      "bill payment", "cashout", "cash out", "outgoing",
+                      "transfer out", "airtime", "data bundle"}
+
+    @staticmethod
+    def _parse_airtel(file_path, raw_text, tables):
+        transactions = []
+
+        for table in tables:
+            for row in table:
+                if not row or not row[0]:
+                    continue
+                cell0 = str(row[0]).strip()
+                if re.match(r'date|time|trans', cell0, re.IGNORECASE):
+                    continue
+                if len(row) < 8:
+                    continue
+                dt = _parse_date(cell0)
+                if dt is None:
+                    continue
+                tx_raw = str(row[2]).strip().lower() if row[2] else ""
+                desc   = str(row[3]).strip()         if row[3] else tx_raw
+                amt_s  = str(row[7]).replace(',', '').strip() if row[7] else ""
+                signed = re.match(r'([+\-])([\d.]+)', amt_s)
+                if signed:
+                    amount = float(signed.group(2)) * (
+                        1 if signed.group(1) == '+' else -1)
+                else:
+                    plain = re.match(r'([\d.,]+)', amt_s)
+                    if not plain:
+                        continue
+                    v    = float(plain.group(1).replace(',', ''))
+                    sign = (1 if any(k in tx_raw
+                                     for k in StatementParser._AIRTEL_CREDIT)
+                            else -1)
+                    amount = sign * v
+                if abs(amount) < 1:
+                    continue
+                bal = (_parse_amount(str(row[9]))
+                       if len(row) > 9 and row[9] else None)
+                transactions.append(Transaction(
+                    date=dt, description=desc or tx_raw, amount=amount,
+                    tx_type="credit" if amount > 0 else "debit",
+                    balance=bal,
+                    reference=str(row[1]).strip() if row[1] else None))
+
+        if not transactions:
+            line_re = re.compile(
+                r'(?:[\d:]+\s*(?:AM|PM)\s*)?(?:\(([A-Z0-9.]+)\)\s*)?'
+                r'(\d{2}/\d{2}/\d{2,4})\s+(.{4,60}?)\s+'
+                r'(?:--\s*)?([+\-]?[\d,]+\.\d{2})',
+                re.IGNORECASE
+            )
+            for m in line_re.finditer(raw_text):
+                dt = _parse_date(m.group(2))
+                if dt is None:
+                    continue
+                desc   = m.group(3).strip()
+                amount = _parse_amount(m.group(4))
+                if amount == 0:
+                    continue
+                if any(k in desc.lower()
+                       for k in ["sent", "payment", "deposit", "purchase"]):
+                    amount = -abs(amount)
+                transactions.append(Transaction(
+                    date=dt, description=desc, amount=amount,
+                    tx_type="credit" if amount > 0 else "debit",
+                    reference=m.group(1) or None))
+
+        transactions.sort(key=lambda t: t.date)
+        return transactions
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # Bank parser — Stanbic, Equity, Centenary, DFCU, generic
+    # ══════════════════════════════════════════════════════════════════════════
+
+    _DATE_HDRS    = {"date", "txn date", "tran date", "trans date",
+                     "value date", "posting date", "transaction date", "posting"}
+    _DESC_HDRS    = {"narration", "description", "particulars", "details",
+                     "transaction details", "remarks", "description of transaction"}
+    _REF_HDRS     = {"reference", "ref", "cheque", "chq", "ref no", "cheque no",
+                     "cheque number", "reference number", "transaction ref"}
+    _DEBIT_HDRS   = {"debit", "withdrawal", "withdrawals", "dr",
+                     "amount dr", "debit amount"}
+    _CREDIT_HDRS  = {"credit", "deposit", "deposits", "cr",
+                     "amount cr", "credit amount"}
+    _BALANCE_HDRS = {"balance", "running balance", "closing balance",
+                     "available balance", "account balance"}
+    _AMOUNT_HDRS  = {"amount", "transaction amount", "amt"}
+
+    @staticmethod
+    def _parse_bank_debit_credit(file_path, raw_text, tables):
+        """
+        Parses bank statement tables into Transaction objects.
+
+        FIXED BUG: Some banks (confirmed with real Equity Bank statements)
+        render each transaction as its OWN tiny table fragment — the
+        column header ("Transaction Details | Payment reference | Value
+        Date | Credit | Debit | Balance") only appears once per PAGE as a
+        separate table, never bundled with the data rows. The old version
+        required a header row to be found INSIDE each table before any of
+        its rows would be processed, so all 100+ data-only table fragments
+        were silently skipped — producing zero transactions despite the
+        PDF clearly containing data (confirmed via debug logging: Equity
+        statement showed 113 tables found, 0 transactions extracted).
+
+        NEW STRATEGY — two passes:
+          Pass 1: scan ALL tables once, try to find ONE header row anywhere
+                   in the document. If found, remember its column layout
+                   (col_map) — this becomes the layout used for every table.
+          Pass 2: for EVERY table (whether or not it has its own header),
+                   try to parse rows using that remembered col_map. A row
+                   is accepted if its date column parses as a real date —
+                   this works whether the table is a header+data block or
+                   a pure data-only fragment, since we no longer require
+                   the header to be present in the same table.
+
+          Fallback: if no header was ever found anywhere (col_map empty),
+          fall back to positional detection — Equity/Stanbic/Centenary/DFCU
+          all commonly use [description, reference, date, credit, debit,
+          balance] as the 6-column order; we try that order directly
+          against any 6-column table whose 3rd column parses as a date.
+        """
+        transactions = []
+        col_map = {}
+
+        # ── Pass 1: find ONE header anywhere in the document ────────────────
+        for table in tables:
+            if col_map:
+                break
+            for row in table[:6]:
+                if not row:
+                    continue
+                low = [str(c).lower().strip() if c else "" for c in row]
+                tmp = {}
+                for ci, cell in enumerate(low):
+                    if any(h in cell for h in StatementParser._DATE_HDRS) and "date" not in tmp:
+                        tmp["date"] = ci
+                    if any(h in cell for h in StatementParser._DESC_HDRS) and "desc" not in tmp:
+                        tmp["desc"] = ci
+                    if any(h in cell for h in StatementParser._DEBIT_HDRS) and "debit" not in tmp:
+                        tmp["debit"] = ci
+                    if any(h in cell for h in StatementParser._CREDIT_HDRS) and "credit" not in tmp:
+                        tmp["credit"] = ci
+                    if any(h in cell for h in StatementParser._AMOUNT_HDRS) and "amount" not in tmp:
+                        tmp["amount"] = ci
+                    if any(h in cell for h in StatementParser._BALANCE_HDRS) and "balance" not in tmp:
+                        tmp["balance"] = ci
+                    if any(h in cell for h in StatementParser._REF_HDRS) and "ref" not in tmp:
+                        tmp["ref"] = ci
+                has_date = "date" in tmp
+                has_amount_col = ("debit" in tmp and "credit" in tmp) or "amount" in tmp
+                if has_date and has_amount_col:
+                    col_map = tmp
+                    break
+
+        # ── Fallback: positional layout if no header found anywhere ─────────
+        # Confirmed real-world layout (Equity Bank, and structurally similar
+        # for Stanbic/Centenary/DFCU 6-column statements):
+        #   [0]=description  [1]=reference  [2]=date
+        #   [3]=credit       [4]=debit       [5]=balance
+        used_positional_fallback = False
+        if not col_map:
+            used_positional_fallback = True
+            col_map = {"desc": 0, "ref": 1, "date": 2,
+                       "credit": 3, "debit": 4, "balance": 5}
+            logger.warning(
+                "_parse_bank_debit_credit: no header row found in any table — "
+                "using positional fallback layout "
+                "[desc, ref, date, credit, debit, balance]. "
+                "If this institution uses a different column order, "
+                "transactions may be misclassified.")
+
+        if "date" not in col_map:
+            return []   # truly nothing usable
+
+        # ── Pass 2: parse every table's rows using the resolved col_map ──────
+        rows_seen = 0
+        rows_with_valid_date = 0
+        for table in tables:
+            for row in table:
+                if not row:
+                    continue
+                rows_seen += 1
+
+                date_idx = col_map["date"]
+                if date_idx >= len(row) or not row[date_idx]:
+                    continue
+                date_cell = str(row[date_idx]).strip()
+                dt = _parse_date(date_cell)
+                if dt is None:
+                    continue
+                rows_with_valid_date += 1
+
+                desc = ""
+                if "desc" in col_map and col_map["desc"] < len(row) and row[col_map["desc"]]:
+                    desc = str(row[col_map["desc"]]).replace('\n', ' ').strip()
+                    # Skip rows where the "description" is actually a header
+                    # label re-appearing (defensive — handles repeated
+                    # per-page headers that DO get bundled with data on some
+                    # pages even though most aren't).
+                    if desc.lower() in ("transaction details", "narration",
+                                       "description", "particulars"):
+                        continue
+
+                ref = None
+                if "ref" in col_map and col_map["ref"] < len(row) and row[col_map["ref"]]:
+                    ref = str(row[col_map["ref"]]).strip()
+
+                if "debit" in col_map and "credit" in col_map:
+                    debit_amt  = (_parse_amount(str(row[col_map["debit"]]))
+                                  if col_map["debit"] < len(row) and row[col_map["debit"]] else 0.0)
+                    credit_amt = (_parse_amount(str(row[col_map["credit"]]))
+                                  if col_map["credit"] < len(row) and row[col_map["credit"]] else 0.0)
+                    amount = None
+                elif "amount" in col_map:
+                    amount = _parse_amount(str(row[col_map["amount"]]))
+                    debit_amt = None
+                    credit_amt = None
+                else:
+                    continue
+
+                balance = None
+                if ("balance" in col_map
+                        and col_map["balance"] < len(row)
+                        and row[col_map["balance"]]):
+                    balance = _parse_amount(str(row[col_map["balance"]]))
+
+                if debit_amt is not None and credit_amt is not None:
+                    if debit_amt == 0 and credit_amt == 0:
+                        continue
+                    if credit_amt > 0:
+                        transactions.append(Transaction(
+                            date=dt, description=desc, amount=credit_amt,
+                            tx_type="credit", balance=balance, reference=ref))
+                    if debit_amt > 0:
+                        transactions.append(Transaction(
+                            date=dt, description=desc, amount=-debit_amt,
+                            tx_type="debit", balance=balance, reference=ref))
+                elif amount is not None:
+                    if amount == 0:
+                        continue
+                    transactions.append(Transaction(
+                        date=dt, description=desc, amount=amount,
+                        tx_type="credit" if amount > 0 else "debit",
+                        balance=balance, reference=ref))
+
+        logger.info(
+            f"_parse_bank_debit_credit: scanned {rows_seen} row(s) across "
+            f"{len(tables)} table(s), {rows_with_valid_date} had a valid date, "
+            f"{len(transactions)} transaction(s) built "
+            f"(positional_fallback={used_positional_fallback}).")
+
+        if not transactions:
+            logger.warning(
+                f"_parse_bank_debit_credit: no transactions from "
+                f"extract_tables() ({len(tables)} table(s) found in PDF) — "
+                f"falling back to text-regex parsing. This usually means "
+                f"pdfplumber could not detect a clean table grid for this "
+                f"statement's layout.")
+            transactions = StatementParser._parse_bank_text(raw_text)
+        else:
+            logger.info(
+                f"_parse_bank_debit_credit: extracted {len(transactions)} "
+                f"transaction(s) from {len(tables)} table(s).")
+
+        transactions.sort(key=lambda t: t.date)
+        return transactions
+
+    @staticmethod
+    def _parse_bank_text(text: str):
+        """
+        Text-regex fallback for bank statements with no table structure
+        detected by pdfplumber.extract_tables().
+
+        CRITICAL FIX: the old version classified credit/debit using
+        keyword matching on the description (_classify_bank_text), which
+        DEFAULTS TO "debit" when no keyword matches. Real Equity Bank
+        transaction descriptions (e.g. "APP/MTN/256787022284/...",
+        "GOU TREASURY SINGLE ACCOUNT") contain none of the credit/debit
+        keywords, so every transaction silently defaulted to debit —
+        this is what caused 12 straight months of negative net flow on
+        a real statement that clearly had income.
+
+        New approach: this fallback should rarely run for Equity Bank,
+        since extract_tables() should detect the 6-column table directly
+        (see _parse_bank_debit_credit). If it DOES run (table detection
+        failed), we no longer guess direction from keywords. Instead we
+        log a clear warning and skip ambiguous lines rather than silently
+        mis-classifying them as debits — a wrong "no transactions found"
+        is recoverable (user is told to check the file), but a wrong
+        "all debits" silently corrupts the loan decision.
+        """
+        transactions = []
+        date_re   = re.compile(
+            r'\b(\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4}'
+            r'|\d{1,2}[/\-][A-Za-z]{3}[/\-]\d{2,4}'
+            r'|\d{4}[/\-]\d{2}[/\-]\d{2})\b'
+        )
+        amount_re = re.compile(r'([\d,]+(?:\.\d{2}))')
+        skipped_ambiguous = 0
+
+        for line in text.splitlines():
+            line = line.strip()
+            if len(line) < 12:
+                continue
+            dm = date_re.search(line)
+            if not dm:
+                continue
+            amounts = [_parse_amount(a) for a in amount_re.findall(line)
+                       if _parse_amount(a) > 10]
+            if not amounts:
+                continue
+            dt = _parse_date(dm.group(1))
+            if dt is None:
+                continue
+            desc = amount_re.sub('', line[dm.end():]).strip()[:80]
+
+            # Only classify when a real keyword is present. If no keyword
+            # matches, we cannot safely guess direction — skip the line
+            # rather than silently defaulting to debit.
+            tx_type = _classify_bank_text_strict(desc)
+            if tx_type is None:
+                skipped_ambiguous += 1
+                continue
+
+            amount = (amounts[0] if len(amounts) == 1
+                      else amounts[-2] if len(amounts) >= 2 else amounts[0])
+            if tx_type == "debit":
+                amount = -amount
+            transactions.append(Transaction(
+                date=dt, description=desc, amount=amount, tx_type=tx_type,
+                balance=amounts[-1] if len(amounts) >= 2 else None))
+
+        if skipped_ambiguous > 0:
+            logger.warning(
+                f"_parse_bank_text: skipped {skipped_ambiguous} line(s) with "
+                f"no credit/debit keyword match — table extraction likely "
+                f"failed for this statement; transactions may be incomplete.")
+        return transactions
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # Summary builder — shared by all parsers
+    # ══════════════════════════════════════════════════════════════════════════
+
+    @staticmethod
+    def _build_summary(result: StatementResult, raw_text: str):
+        txns    = result.transactions
+        credits = [t for t in txns if t.tx_type == "credit"]
+        debits  = [t for t in txns if t.tx_type == "debit"]
+
+        result.total_credits  = sum(t.amount for t in credits)
+        result.total_debits   = sum(abs(t.amount) for t in debits)
+        result.net_cash_flow  = result.total_credits - result.total_debits
+        result.largest_credit = max((t.amount for t in credits), default=0)
+        result.largest_debit  = max((abs(t.amount) for t in debits), default=0)
+
+        # Latest known balance — from the most recent transaction that has one
+        bal_txns = [t for t in txns if t.balance is not None]
+        if bal_txns:
+            result.latest_balance = bal_txns[-1].balance
+
+        monthly: dict = defaultdict(lambda: {"in": 0.0, "out": 0.0, "count": 0})
+        for t in txns:
+            key = t.date.strftime("%b %Y")
+            if t.tx_type == "credit":
+                monthly[key]["in"]  += t.amount
+            else:
+                monthly[key]["out"] += abs(t.amount)
+            monthly[key]["count"] += 1
+
+        start = result.period_from or (min((t.date for t in txns), default=None))
+        end   = result.period_to   or (max((t.date for t in txns), default=None))
+
+        months_ordered = []
+        if start and end:
+            cur  = datetime(start.year, start.month, 1)
+            last = datetime(end.year,   end.month,   1)
+            while cur <= last:
+                months_ordered.append(cur.strftime("%b %Y"))
+                if cur.month == 12:
+                    cur = datetime(cur.year + 1, 1, 1)
+                else:
+                    cur = datetime(cur.year, cur.month + 1, 1)
+        else:
+            months_ordered = sorted(monthly.keys(),
+                                    key=lambda kv: datetime.strptime(kv, "%b %Y"))
+
+        for m in months_ordered:
+            _ = monthly[m]
+
+        result.monthly_summaries = [
+            MonthlySummary(
+                month=m, total_in=v["in"], total_out=v["out"],
+                net=v["in"] - v["out"], tx_count=v["count"])
+            for m, v in sorted(
+                monthly.items(),
+                key=lambda kv: datetime.strptime(kv[0], "%b %Y"))
         ]
 
-        for i, (label, value, found) in enumerate(fields):
-            cell = ctk.CTkFrame(id_frame, fg_color="transparent")
-            cell.grid(row=0, column=i,
-                      padx=(12 if i == 0 else 4, 4),
-                      pady=10, sticky="w")
+        result.months_covered = max(len(result.monthly_summaries), 1)
+        incomes = [m.total_in for m in result.monthly_summaries]
 
-            ctk.CTkLabel(
-                cell,
-                text=label,
-                font=FONTS.get("caption", ("Helvetica", 10)),
-                text_color=COLORS.get("text_muted", "#718096"),
-                anchor="w",
-            ).pack(anchor="w")
+        def _median(xs):
+            s = sorted(xs)
+            n = len(s)
+            if n == 0:
+                return 0.0
+            mid = n // 2
+            return (s[mid] if n % 2 == 1 else (s[mid - 1] + s[mid]) / 2)
 
-            ctk.CTkLabel(
-                cell,
-                text=value,
-                font=FONTS.get("body_small", ("Helvetica", 12, "bold")),
-                text_color=(COLORS.get("text_primary", "#1A202C")
-                            if found
-                            else COLORS.get("text_muted", "#718096")),
-                anchor="w",
-                wraplength=180,
-                justify="left",
-            ).pack(anchor="w")
+        # ── Avg monthly income: straight average, NO outlier stripping ────────
+        # IQR stripping was incorrectly removing genuine large credits
+        # (e.g. business income, large transfers) and zeroing out income entirely.
+        result.avg_monthly_income = (result.total_credits / result.months_covered
+                                     if result.months_covered else 0.0)
+        result.avg_monthly_expense = (result.total_debits / result.months_covered
+                                      if result.months_covered else 0.0)
+        result.avg_monthly_net     = (result.avg_monthly_income
+                                      - result.avg_monthly_expense)
 
-        ctk.CTkFrame(
-            self, fg_color=COLORS.get("border", "#E2E8F0"), height=1,
-        ).grid(row=self._next_row, column=0, sticky="ew", padx=16, pady=(4, 0))
-        self._next_row += 1
-
-    # ── KPI row ───────────────────────────────────────────────────────────────
-
-    def _build_kpi_row(self):
-        """
-        Shows the income values that the ceiling engine ACTUALLY used —
-        not the raw parser avg_monthly_income which can be zero when
-        the IQR outlier logic stripped large credits.
-        """
-        r = self.result
-        c = self.ceiling
-
-        # Use ceiling engine values when available — they are more accurate
-        if c:
-            income_display  = float(c.income_used)
-            income_label    = "Income used (ceiling)"
-            expense_display = r.avg_monthly_expense
-            net_display     = income_display - expense_display
+        # ── Recent 3-month trailing average (recency-weighted income signal) ──
+        # Uses only the last 3 months so a large recent credit (like the 16M)
+        # is properly reflected without being diluted by older zero months.
+        recent_summaries = result.monthly_summaries[-3:]
+        if recent_summaries:
+            result.recent_avg_income = (
+                sum(m.total_in for m in recent_summaries) / len(recent_summaries))
         else:
-            income_display  = r.avg_monthly_income
-            income_label    = "Avg monthly income"
-            expense_display = r.avg_monthly_expense
-            net_display     = r.net_monthly_flow
+            result.recent_avg_income = result.avg_monthly_income
 
-        recent = getattr(r, "recent_avg_income", 0.0)
-        balance = getattr(r, "latest_balance", 0.0)
+        # ── net_monthly_flow: use the HIGHER of 12-month avg or 3-month recent ─
+        # This ensures a borrower with recent strong income is not penalised
+        # for an earlier gap period, while still protecting against one-month
+        # spikes being the only signal.
+        best_income  = max(result.avg_monthly_income, result.recent_avg_income)
+        best_expense = result.avg_monthly_expense
+        result.net_monthly_flow = best_income - best_expense
 
-        kpi_frame = ctk.CTkFrame(self, fg_color="transparent")
-        kpi_frame.grid(row=self._next_row, column=0, sticky="ew", padx=16, pady=10)
-        self._next_row += 1
-        for i in range(5):
-            kpi_frame.columnconfigure(i, weight=1, uniform="kpi")
-
-        kpis = [
-            (income_label,
-             _ugx(income_display),
-             COLORS.get("accent_green", "#276749")),
-            ("Recent 3-month avg",
-             _ugx(recent),
-             COLORS.get("accent_green", "#276749")),
-            ("Avg monthly expense",
-             _ugx(expense_display),
-             COLORS.get("danger", "#E53E3E")),
-            ("Net monthly flow",
-             _ugx(net_display),
-             COLORS.get("accent_green") if net_display >= 0
-             else COLORS.get("danger", "#E53E3E")),
-            ("Latest balance",
-             _ugx(balance) if balance > 0 else "N/A",
-             COLORS.get("text_secondary", "#4A5568")),
-        ]
-
-        for i, (label, value, color) in enumerate(kpis):
-            cell = ctk.CTkFrame(
-                kpi_frame,
-                fg_color=COLORS.get("bg_input", "#F7FAFC"),
-                corner_radius=8,
-            )
-            cell.grid(row=0, column=i,
-                      padx=(0 if i == 0 else 4, 0),
-                      sticky="ew")
-            ctk.CTkLabel(
-                cell, text=label,
-                font=FONTS.get("caption", ("Helvetica", 10)),
-                text_color=COLORS.get("text_muted", "#718096"),
-                anchor="w",
-                wraplength=120,
-            ).pack(anchor="w", padx=10, pady=(8, 0))
-            ctk.CTkLabel(
-                cell, text=value,
-                font=FONTS.get("subheading", ("Helvetica", 13, "bold")),
-                text_color=color,
-                anchor="w",
-            ).pack(anchor="w", padx=10, pady=(2, 8))
-
-        ctk.CTkFrame(
-            self, fg_color=COLORS.get("border", "#E2E8F0"), height=1,
-        ).grid(row=self._next_row, column=0, sticky="ew", padx=16)
-        self._next_row += 1
-
-    # ── Monthly breakdown ─────────────────────────────────────────────────────
-
-    def _build_monthly_breakdown(self):
-        """
-        Renders monthly cards in a grid wrapping at 6 columns per row.
-        Each card is bigger than before and shows the actual UGX amounts
-        for income (In) and expense (Out) as separate labeled lines,
-        not just a thin proportional bar.
-        """
-        r = self.result
-        if not r.monthly_summaries:
-            return
-
-        section = ctk.CTkFrame(self, fg_color="transparent")
-        section.grid(row=self._next_row, column=0, sticky="ew", padx=16, pady=(10, 4))
-        self._next_row += 1
-
-        PER_ROW = 6
-        for i in range(PER_ROW):
-            section.columnconfigure(i, weight=1, uniform="month")
-
-        ctk.CTkLabel(
-            section, text="Monthly breakdown",
-            font=FONTS.get("caption", ("Helvetica", 11)),
-            text_color=COLORS.get("text_muted", "#718096"),
-            anchor="w",
-        ).grid(row=0, column=0, columnspan=PER_ROW,
-               sticky="w", pady=(0, 8))
-
-        max_val = max(
-            (max(m.total_in, m.total_out) for m in r.monthly_summaries),
-            default=1,
-        )
-
-        for i, ms in enumerate(r.monthly_summaries):
-            row_idx = 1 + (i // PER_ROW)
-            col_idx = i % PER_ROW
-
-            col = ctk.CTkFrame(
-                section,
-                fg_color=COLORS.get("bg_input", "#F7FAFC"),
-                corner_radius=10,
-            )
-            col.grid(row=row_idx, column=col_idx,
-                     padx=(0 if col_idx == 0 else 6, 0),
-                     pady=(0, 6),
-                     sticky="nsew")
-
-            # Month + year label — e.g. "Jun 2025"
-            ctk.CTkLabel(
-                col,
-                text=ms.month,
-                font=FONTS.get("body_small", ("Helvetica", 12, "bold")),
-                text_color=COLORS.get("text_primary", "#1A202C"),
-                anchor="center",
-            ).pack(anchor="center", padx=8, pady=(10, 6))
-
-            # In row — green, shows actual UGX amount
-            in_row = ctk.CTkFrame(col, fg_color="transparent")
-            in_row.pack(fill="x", padx=10, pady=1)
-            ctk.CTkLabel(
-                in_row, text="In",
-                font=FONTS.get("caption", ("Helvetica", 10)),
-                text_color=COLORS.get("text_muted", "#718096"),
-                width=28, anchor="w",
-            ).pack(side="left")
-            ctk.CTkLabel(
-                in_row, text=_ugx(ms.total_in),
-                font=FONTS.get("caption", ("Helvetica", 11, "bold")),
-                text_color=COLORS.get("accent_green", "#276749"),
-                anchor="e",
-            ).pack(side="right")
-
-            # Bar for In
-            bar_bg_in = ctk.CTkFrame(
-                col, fg_color=COLORS.get("border", "#E2E8F0"),
-                height=6, corner_radius=3,
-            )
-            bar_bg_in.pack(fill="x", padx=10, pady=(0, 4))
-            pct_in = max(0.04, ms.total_in / max_val) if max_val > 0 else 0.04
-            ctk.CTkFrame(
-                bar_bg_in,
-                fg_color=COLORS.get("accent_green", "#48BB78"),
-                height=6, corner_radius=3,
-            ).place(x=0, y=0, relheight=1, relwidth=min(pct_in, 1.0))
-
-            # Out row — red, shows actual UGX amount
-            out_row = ctk.CTkFrame(col, fg_color="transparent")
-            out_row.pack(fill="x", padx=10, pady=1)
-            ctk.CTkLabel(
-                out_row, text="Out",
-                font=FONTS.get("caption", ("Helvetica", 10)),
-                text_color=COLORS.get("text_muted", "#718096"),
-                width=28, anchor="w",
-            ).pack(side="left")
-            ctk.CTkLabel(
-                out_row, text=_ugx(ms.total_out),
-                font=FONTS.get("caption", ("Helvetica", 11, "bold")),
-                text_color=COLORS.get("danger", "#E53E3E"),
-                anchor="e",
-            ).pack(side="right")
-
-            # Bar for Out
-            bar_bg_out = ctk.CTkFrame(
-                col, fg_color=COLORS.get("border", "#E2E8F0"),
-                height=6, corner_radius=3,
-            )
-            bar_bg_out.pack(fill="x", padx=10, pady=(0, 6))
-            pct_out = max(0.04, ms.total_out / max_val) if max_val > 0 else 0.04
-            ctk.CTkFrame(
-                bar_bg_out,
-                fg_color=COLORS.get("danger", "#E53E3E"),
-                height=6, corner_radius=3,
-            ).place(x=0, y=0, relheight=1, relwidth=min(pct_out, 1.0))
-
-            # Net — divider + bold net figure
-            ctk.CTkFrame(
-                col, fg_color=COLORS.get("border", "#E2E8F0"), height=1,
-            ).pack(fill="x", padx=10, pady=(2, 4))
-
-            net = ms.total_in - ms.total_out
-            net_color = (COLORS.get("accent_green", "#276749")
-                         if net >= 0 else COLORS.get("danger", "#E53E3E"))
-            sign = "+" if net >= 0 else ""
-            ctk.CTkLabel(
-                col,
-                text=f"Net: {sign}{_ugx(net)}",
-                font=FONTS.get("caption", ("Helvetica", 11, "bold")),
-                text_color=net_color,
-                anchor="center",
-            ).pack(anchor="center", padx=8, pady=(0, 10))
-
-        # Advance the parent card's row counter by exactly how many rows
-        # the breakdown grid used (wraps at PER_ROW months per row).
-        import math
-        rows_used = max(1, math.ceil(len(r.monthly_summaries) / PER_ROW))
-        self._next_row += rows_used
-
-        ctk.CTkFrame(
-            self, fg_color=COLORS.get("border", "#E2E8F0"), height=1,
-        ).grid(row=self._next_row, column=0, sticky="ew", padx=16, pady=(4, 0))
-        self._next_row += 1
-
-    # ── Loan scenarios ────────────────────────────────────────────────────────
-
-    def _build_loan_scenarios(self):
-        """
-        Renders exactly 3 scenario cards: 1-month, 3-month, 6-month.
-        3-month is highlighted as the typical Bingongold loan.
-        Each card shows risk label and viability from the ceiling engine.
-        """
-        c = self.ceiling
-        r = self.result
-
-        # ── Normalise scenarios from CeilingResult ────────────────────────────
-        scenarios = []
-        if c and hasattr(c, "scenarios") and c.scenarios:
-            for s in c.scenarios:
-                def _g(obj, *keys, default=None):
-                    for k in keys:
-                        v = (obj.get(k) if isinstance(obj, dict)
-                             else getattr(obj, k, None))
-                        if v is not None:
-                            return v
-                    return default
-
-                months    = int(_g(s, "duration_months", "months",
-                                   "duration", "term") or 3)
-                principal = float(_g(s, "principal", "loan_amount",
-                                     "amount") or 0)
-                instalment = float(_g(s, "monthly_instalment", "instalment",
-                                      "monthly_payment", "payment") or 0)
-                aff_raw   = _g(s, "affordability_pct", "pct_income",
-                                "percentage") or 0
-                aff_pct   = float(aff_raw) / 100 if float(aff_raw) > 1 else float(aff_raw)
-                is_viable = bool(_g(s, "is_viable") if _g(s, "is_viable") is not None
-                                 else aff_pct <= 0.60)
-                risk_label = str(_g(s, "risk_label") or (
-                    "Low" if aff_pct <= 0.30 else
-                    "Moderate" if aff_pct <= 0.50 else
-                    "High" if aff_pct <= 0.60 else "Very High"))
-
-                scenarios.append({
-                    "months":     months,
-                    "principal":  principal,
-                    "instalment": instalment,
-                    "aff_pct":    aff_pct,
-                    "is_viable":  is_viable,
-                    "risk_label": risk_label,
-                })
+        # ── Income consistency: only count months that had ANY transactions ───
+        # Zero-income months caused by a gap period (no transactions at all)
+        # should not penalise the consistency score — the borrower simply
+        # was not active in those months, not earning irregularly.
+        active_incomes = [m.total_in for m in result.monthly_summaries
+                          if m.tx_count > 0]
+        if active_incomes and len(active_incomes) >= 2:
+            med = _median(active_incomes)
+            if med == 0:
+                nonzero = sum(1 for i in active_incomes if i > 0)
+                result.income_consistency = (0.0 if nonzero == 0
+                                             else nonzero / len(active_incomes))
+            else:
+                # Band: within 30%-300% of median (wider than before to handle
+                # irregular earners whose income genuinely varies month-to-month)
+                in_band = sum(1 for i in active_incomes
+                              if 0.30 * med <= i <= 3.0 * med)
+                result.income_consistency = in_band / len(active_incomes)
+        elif active_incomes:
+            result.income_consistency = 1.0   # only 1 active month — no pattern yet
         else:
-            # Fallback: calculate directly — durations 1, 3, 6 months
-            income = float(c.income_used) if c else (r.avg_monthly_income or 0)
-            for mos in [1, 3, 6]:
-                inst      = income * 0.30
-                principal = (inst * mos) / (1 + 0.10 * mos) if mos else 0
-                aff_pct   = (inst / income) if income > 0 else 0
-                scenarios.append({
-                    "months": mos, "principal": round(principal),
-                    "instalment": round(inst), "aff_pct": aff_pct,
-                    "is_viable": aff_pct <= 0.60, "risk_label": "Moderate",
-                })
+            result.income_consistency = 0.0
 
-        if not scenarios:
-            return
+        credit_tx_by_month = defaultdict(list)
+        for t in credits:
+            credit_tx_by_month[t.date.strftime("%b %Y")].append(t)
 
-        # ── Risk colour helper ────────────────────────────────────────────────
-        def _risk_color(label: str) -> str:
-            return {
-                "Low":       COLORS.get("accent_green", "#276749"),
-                "Moderate":  COLORS.get("warning", "#D69E2E"),
-                "High":      "#E53E3E",
-                "Very High": "#9B2335",
-            }.get(label, COLORS.get("text_muted", "#718096"))
+        rep_days, rep_amounts = [], []
+        for ms in result.monthly_summaries:
+            txs = credit_tx_by_month.get(ms.month, [])
+            if not txs:
+                continue
+            best = max(txs, key=lambda x: x.amount)
+            rep_days.append(best.date.day)
+            rep_amounts.append(best.amount)
 
-        # ── Layout ────────────────────────────────────────────────────────────
-        section = ctk.CTkFrame(self, fg_color="transparent")
-        section.grid(row=self._next_row, column=0, sticky="ew", padx=16, pady=10)
-        self._next_row += 1
-        for i in range(len(scenarios)):
-            section.columnconfigure(i, weight=1, uniform="scenario")
+        result.has_salary_pattern = False
+        if len(rep_days) >= 3:
+            median_day = int(_median(rep_days))
+            day_match  = sum(1 for d in rep_days if abs(d - median_day) <= 3)
+            med_amt    = _median(rep_amounts)
+            amt_match  = sum(1 for a in rep_amounts
+                             if med_amt * 0.7 <= a <= med_amt * 1.3)
+            if (day_match  >= max(3, int(0.75 * len(rep_days)))
+                    and amt_match >= max(3, int(0.75 * len(rep_amounts)))):
+                result.has_salary_pattern = True
 
-        ctk.CTkLabel(
-            section,
-            text="Loan scenarios  ·  10% per month on principal  ·  Max 6 months",
-            font=FONTS.get("caption", ("Helvetica", 11)),
-            text_color=COLORS.get("text_muted", "#718096"),
-            anchor="w",
-        ).grid(row=0, column=0, columnspan=len(scenarios),
-               sticky="w", pady=(0, 8))
+        sal_kw = ["salary", "payroll", "wage", "pay ", "employer", "net pay"]
+        if any(k in raw_text.lower() for k in sal_kw):
+            result.has_salary_pattern = True
 
-        for i, sc in enumerate(scenarios):
-            months     = sc["months"]
-            principal  = sc["principal"]
-            instalment = sc["instalment"]
-            aff_pct    = sc["aff_pct"]
-            is_viable  = sc["is_viable"]
-            risk_label = sc["risk_label"]
-            is_typical = (months == 3)   # 3-month = typical Bingongold loan
+        result.has_irregular_income = result.income_consistency < 0.5
 
-            card = ctk.CTkFrame(
-                section,
-                fg_color=COLORS.get("bg_card", "#FFFFFF"),
-                corner_radius=8,
-                border_width=2 if is_typical else 1,
-                border_color=(COLORS.get("accent_green", "#276749")
-                              if is_typical
-                              else COLORS.get("border", "#E2E8F0")),
-            )
-            card.grid(row=1, column=i,
-                      padx=(0 if i == 0 else 6, 0),
-                      sticky="nsew")
 
-            # "typical" banner on 3-month card
-            if is_typical:
-                ctk.CTkLabel(
-                    card, text="✦ typical loan",
-                    font=FONTS.get("caption", ("Helvetica", 10)),
-                    text_color=COLORS.get("accent_green", "#276749"),
-                    fg_color=COLORS.get("bg_input", "#F7FAFC"),
-                    corner_radius=0,
-                ).pack(fill="x")
+# ══════════════════════════════════════════════════════════════════════════════
+# Shared utility functions
+# ══════════════════════════════════════════════════════════════════════════════
 
-            # Duration heading
-            ctk.CTkLabel(
-                card,
-                text=f"{months}-Month Loan",
-                font=FONTS.get("body_small", ("Helvetica", 12, "bold")),
-                text_color=COLORS.get("text_primary", "#1A202C"),
-                anchor="w",
-            ).pack(anchor="w", padx=12,
-                   pady=(10 if not is_typical else 6, 0))
+_DATE_FMTS = [
+    "%d %b %Y", "%d %B %Y", "%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d",
+    "%d/%m/%y", "%d-%m-%y", "%d-%b-%Y", "%d-%b-%y", "%d/%b/%Y",
+    "%m/%d/%Y", "%d %b %y",
+]
+_DATETIME_FMTS = [
+    "%d %b %Y %H:%M", "%d %B %Y %H:%M", "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%d %H:%M", "%d/%m/%Y %H:%M", "%d-%m-%Y %H:%M",
+]
 
-            # Principal amount — large
-            ctk.CTkLabel(
-                card, text=_ugx(principal),
-                font=FONTS.get("subheading", ("Helvetica", 15, "bold")),
-                text_color=COLORS.get("text_primary", "#1A202C"),
-                anchor="w",
-            ).pack(anchor="w", padx=12, pady=(2, 0))
 
-            # Monthly instalment
-            ctk.CTkLabel(
-                card,
-                text=f"Instalment: {_ugx(instalment)} / mo",
-                font=FONTS.get("caption", ("Helvetica", 11)),
-                text_color=COLORS.get("text_secondary", "#4A5568"),
-                anchor="w",
-            ).pack(anchor="w", padx=12, pady=(2, 0))
+def _parse_date(s: str) -> Optional[datetime]:
+    s = s.strip()
+    for fmt in _DATE_FMTS:
+        try:
+            return datetime.strptime(s, fmt)
+        except ValueError:
+            pass
+    m = re.search(r'(\d{4})[/\-](\d{2})[/\-](\d{2})', s)
+    if m:
+        try:
+            return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            pass
+    return None
 
-            # Income usage %
-            ctk.CTkLabel(
-                card,
-                text=f"{int(aff_pct * 100)}% of net income",
-                font=FONTS.get("caption", ("Helvetica", 11)),
-                text_color=COLORS.get("text_muted", "#718096"),
-                anchor="w",
-            ).pack(anchor="w", padx=12, pady=(1, 0))
 
-            # Risk badge row
-            risk_row = ctk.CTkFrame(card, fg_color="transparent")
-            risk_row.pack(anchor="w", padx=12, pady=(4, 0))
+def _parse_datetime(s: str) -> Optional[datetime]:
+    s = s.strip()
+    for fmt in _DATETIME_FMTS:
+        try:
+            return datetime.strptime(s, fmt)
+        except ValueError:
+            pass
+    return _parse_date(s)
 
-            ctk.CTkLabel(
-                risk_row,
-                text=f"● {risk_label} Risk",
-                font=FONTS.get("caption", ("Helvetica", 11, "bold")),
-                text_color=_risk_color(risk_label),
-                anchor="w",
-            ).pack(side="left")
 
-            if not is_viable:
-                ctk.CTkLabel(
-                    risk_row,
-                    text="  ⚠ High repayment risk",
-                    font=FONTS.get("caption", ("Helvetica", 10)),
-                    text_color=COLORS.get("danger", "#E53E3E"),
-                    anchor="w",
-                ).pack(side="left")
+def _parse_amount(s: str) -> float:
+    if not s:
+        return 0.0
+    s = re.sub(r'[^\d.\+\-]', '', str(s).replace(',', ''))
+    try:
+        return float(s)
+    except ValueError:
+        return 0.0
 
-            # Accept button
-            ctk.CTkButton(
-                card, text="Accept →",
-                height=32,
-                font=FONTS.get("body_small", ("Helvetica", 12)),
-                fg_color=(COLORS.get("accent_green", "#276749")
-                          if is_typical and is_viable
-                          else COLORS.get("bg_input", "#F7FAFC")),
-                hover_color=COLORS.get("accent_green_dark", "#1C4532"),
-                text_color=("#FFFFFF"
-                            if is_typical and is_viable
-                            else COLORS.get("text_primary", "#1A202C")),
-                corner_radius=6,
-                command=lambda m=months, p=principal: (
-                    self.on_accept(f"{m}-month", p, m)
-                    if self.on_accept else None),
-            ).pack(fill="x", padx=12, pady=(8, 10))
 
-        ctk.CTkFrame(
-            self, fg_color=COLORS.get("border", "#E2E8F0"), height=1,
-        ).grid(row=self._next_row, column=0, sticky="ew", padx=16, pady=(4, 0))
-        self._next_row += 1
+_CREDIT_KW = {"salary", "credit", "deposit", "received", "transfer in",
+              "inward", "refund", "interest", "topup", "income", "wage",
+              "payroll", "cash in", "cashin", "payment received"}
+_DEBIT_KW  = {"debit", "withdrawal", "withdraw", "transfer out", "payment",
+              "charge", "fee", "outward", "purchase", "sent", "send",
+              "cash out", "cashout", "bill", "airtime"}
 
-    # ── Risk note ─────────────────────────────────────────────────────────────
 
-    def _build_risk_note(self):
-        r  = self.result
-        c  = self.ceiling
-        warnings = []
+def _classify_bank_text(desc: str) -> str:
+    """
+    Legacy keyword classifier — DEFAULTS TO DEBIT when no keyword matches.
+    Kept only for backward compatibility with any external callers.
+    Internal code should use _classify_bank_text_strict() instead, which
+    returns None on ambiguous input rather than silently guessing.
+    """
+    d = desc.lower()
+    for kw in _CREDIT_KW:
+        if kw in d:
+            return "credit"
+    for kw in _DEBIT_KW:
+        if kw in d:
+            return "debit"
+    return "debit"
 
-        # Use ceiling red flags first — they are more context-aware
-        if c and c.red_flags:
-            warnings.extend(c.red_flags)
-        if c and c.warnings:
-            warnings.extend(c.warnings)
 
-        # Add parser warnings that aren't already covered
-        for w in r.parse_warnings:
-            if w not in warnings:
-                warnings.append(w)
+def _classify_bank_text_strict(desc: str) -> Optional[str]:
+    """
+    Returns "credit", "debit", or None if no keyword matches.
+    Used by _parse_bank_text() so ambiguous transactions are SKIPPED
+    rather than silently assumed to be debits — this was the root cause
+    of statements showing 100% negative cash flow when the real table
+    extraction failed and descriptions contained no recognisable keyword
+    (e.g. "APP/MTN/256787022284/...", "GOU TREASURY SINGLE ACCOUNT").
+    """
+    d = desc.lower()
+    for kw in _CREDIT_KW:
+        if kw in d:
+            return "credit"
+    for kw in _DEBIT_KW:
+        if kw in d:
+            return "debit"
+    return None
 
-        if r.months_covered < 3:
-            warnings.append(
-                f"Only {r.months_covered} month(s) of history — "
-                "request a longer statement if possible.")
 
-        if not warnings:
-            return
+# ══════════════════════════════════════════════════════════════════════════════
+# CLI test  —  python statement_parser.py <statement.pdf>
+# ══════════════════════════════════════════════════════════════════════════════
 
-        note = ctk.CTkFrame(
-            self,
-            fg_color=COLORS.get("bg_warning", "#FFFBEB"),
-            corner_radius=8,
-        )
-        note.grid(row=self._next_row, column=0, sticky="ew", padx=16, pady=(8, 14))
-        self._next_row += 1
+if __name__ == "__main__":
+    import sys
 
-        for w in warnings:
-            ctk.CTkLabel(
-                note,
-                text=f"⚠  {w}",
-                font=FONTS.get("caption", ("Helvetica", 11)),
-                text_color=COLORS.get("warning", "#D69E2E"),
-                anchor="w",
-                justify="left",
-                wraplength=700,
-            ).pack(anchor="w", padx=12, pady=(6, 0))
+    if len(sys.argv) < 2:
+        print("Usage: python statement_parser.py <statement.pdf> [password]")
+        sys.exit(1)
 
-        ctk.CTkFrame(note, fg_color="transparent", height=6).pack()
+    pw  = sys.argv[2] if len(sys.argv) > 2 else None
+    enc = StatementParser.is_encrypted(sys.argv[1])
+    if enc:
+        print(f"[INFO] PDF is encrypted. Password provided: {'yes' if pw else 'no'}")
+
+    r = StatementParser.parse(sys.argv[1], password=pw)
+
+    print("\n" + "=" * 60)
+    print("  STATEMENT ANALYSIS")
+    print("=" * 60)
+    print(r.as_text())
+
+    if r.monthly_summaries:
+        print("\nMonthly breakdown:")
+        print(f"  {'Month':<12} {'In':>12} {'Out':>12} {'Net':>12}")
+        print(f"  {'-'*12} {'-'*12} {'-'*12} {'-'*12}")
+        for ms in r.monthly_summaries:
+            print(f"  {ms.month:<12} {ms.total_in:>12,.0f} "
+                  f"{ms.total_out:>12,.0f} {ms.net:>12,.0f}")
+
+    print(f"\n{'✅' if r.transactions else '⚠️ '} "
+          f"{len(r.transactions)} transactions extracted.")
+    sys.exit(0 if r.transactions else 1)
