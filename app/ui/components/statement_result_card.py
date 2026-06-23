@@ -50,6 +50,12 @@ class StatementResultCard(ctk.CTkFrame):
         self.on_accept = on_accept
         self.columnconfigure(0, weight=1)
 
+        # Dynamic row counter — the monthly breakdown section can span a
+        # variable number of grid rows depending on how many months are
+        # present (wraps at 6 per row), so every section after it must use
+        # this counter instead of a hardcoded row number.
+        self._next_row = 0
+
         self._build_header()
         self._build_identity_row()   # NEW — name / NIN / account / period
         self._build_kpi_row()
@@ -62,7 +68,8 @@ class StatementResultCard(ctk.CTkFrame):
     def _build_header(self):
         r = self.result
         hdr = ctk.CTkFrame(self, fg_color="transparent")
-        hdr.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 4))
+        hdr.grid(row=self._next_row, column=0, sticky="ew", padx=16, pady=(14, 4))
+        self._next_row += 1
         hdr.columnconfigure(1, weight=1)
 
         icon = ctk.CTkLabel(
@@ -110,7 +117,8 @@ class StatementResultCard(ctk.CTkFrame):
 
         ctk.CTkFrame(
             self, fg_color=COLORS.get("border", "#E2E8F0"), height=1,
-        ).grid(row=1, column=0, sticky="ew", padx=16)
+        ).grid(row=self._next_row, column=0, sticky="ew", padx=16)
+        self._next_row += 1
 
     # ── Identity row — name / NIN / account / period ─────────────────────────
 
@@ -127,7 +135,8 @@ class StatementResultCard(ctk.CTkFrame):
             fg_color=COLORS.get("bg_input", "#F7FAFC"),
             corner_radius=8,
         )
-        id_frame.grid(row=2, column=0, sticky="ew", padx=16, pady=(10, 4))
+        id_frame.grid(row=self._next_row, column=0, sticky="ew", padx=16, pady=(10, 4))
+        self._next_row += 1
         id_frame.columnconfigure((0, 1, 2, 3), weight=1, uniform="id")
 
         # Equity Bank statements never print NIN — show a clearer message
@@ -182,7 +191,8 @@ class StatementResultCard(ctk.CTkFrame):
 
         ctk.CTkFrame(
             self, fg_color=COLORS.get("border", "#E2E8F0"), height=1,
-        ).grid(row=3, column=0, sticky="ew", padx=16, pady=(4, 0))
+        ).grid(row=self._next_row, column=0, sticky="ew", padx=16, pady=(4, 0))
+        self._next_row += 1
 
     # ── KPI row ───────────────────────────────────────────────────────────────
 
@@ -211,7 +221,8 @@ class StatementResultCard(ctk.CTkFrame):
         balance = getattr(r, "latest_balance", 0.0)
 
         kpi_frame = ctk.CTkFrame(self, fg_color="transparent")
-        kpi_frame.grid(row=4, column=0, sticky="ew", padx=16, pady=10)
+        kpi_frame.grid(row=self._next_row, column=0, sticky="ew", padx=16, pady=10)
+        self._next_row += 1
         for i in range(5):
             kpi_frame.columnconfigure(i, weight=1, uniform="kpi")
 
@@ -259,29 +270,37 @@ class StatementResultCard(ctk.CTkFrame):
 
         ctk.CTkFrame(
             self, fg_color=COLORS.get("border", "#E2E8F0"), height=1,
-        ).grid(row=5, column=0, sticky="ew", padx=16)
+        ).grid(row=self._next_row, column=0, sticky="ew", padx=16)
+        self._next_row += 1
 
     # ── Monthly breakdown ─────────────────────────────────────────────────────
 
     def _build_monthly_breakdown(self):
+        """
+        Renders monthly cards in a grid wrapping at 6 columns per row.
+        Each card is bigger than before and shows the actual UGX amounts
+        for income (In) and expense (Out) as separate labeled lines,
+        not just a thin proportional bar.
+        """
         r = self.result
         if not r.monthly_summaries:
             return
 
         section = ctk.CTkFrame(self, fg_color="transparent")
-        section.grid(row=6, column=0, sticky="ew", padx=16, pady=(10, 4))
+        section.grid(row=self._next_row, column=0, sticky="ew", padx=16, pady=(10, 4))
+        self._next_row += 1
 
-        n_months = len(r.monthly_summaries)
-        for i in range(n_months):
-            section.columnconfigure(i, weight=1)
+        PER_ROW = 6
+        for i in range(PER_ROW):
+            section.columnconfigure(i, weight=1, uniform="month")
 
         ctk.CTkLabel(
             section, text="Monthly breakdown",
             font=FONTS.get("caption", ("Helvetica", 11)),
             text_color=COLORS.get("text_muted", "#718096"),
             anchor="w",
-        ).grid(row=0, column=0, columnspan=max(n_months, 1),
-               sticky="w", pady=(0, 6))
+        ).grid(row=0, column=0, columnspan=PER_ROW,
+               sticky="w", pady=(0, 8))
 
         max_val = max(
             (max(m.total_in, m.total_out) for m in r.monthly_summaries),
@@ -289,36 +308,90 @@ class StatementResultCard(ctk.CTkFrame):
         )
 
         for i, ms in enumerate(r.monthly_summaries):
+            row_idx = 1 + (i // PER_ROW)
+            col_idx = i % PER_ROW
+
             col = ctk.CTkFrame(
                 section,
                 fg_color=COLORS.get("bg_input", "#F7FAFC"),
-                corner_radius=8,
+                corner_radius=10,
             )
-            col.grid(row=1, column=i, padx=(0 if i == 0 else 3, 0), sticky="ew")
+            col.grid(row=row_idx, column=col_idx,
+                     padx=(0 if col_idx == 0 else 6, 0),
+                     pady=(0, 6),
+                     sticky="nsew")
 
-            # Month label — short (Jun, Jul …)
+            # Month + year label — e.g. "Jun 2025"
             ctk.CTkLabel(
                 col,
-                text=ms.month.split()[0],   # "Jun" not "Jun 2025"
-                font=FONTS.get("caption", ("Helvetica", 10)),
+                text=ms.month,
+                font=FONTS.get("body_small", ("Helvetica", 12, "bold")),
                 text_color=COLORS.get("text_primary", "#1A202C"),
                 anchor="center",
-            ).pack(anchor="center", padx=4, pady=(6, 2))
+            ).pack(anchor="center", padx=8, pady=(10, 6))
 
-            for val, color_key in [(ms.total_in, "accent_green"),
-                                   (ms.total_out, "danger")]:
-                bar_bg = ctk.CTkFrame(
-                    col,
-                    fg_color=COLORS.get("border", "#E2E8F0"),
-                    height=5, corner_radius=2,
-                )
-                bar_bg.pack(fill="x", padx=4, pady=1)
-                pct = max(0.04, val / max_val) if max_val > 0 else 0.04
-                ctk.CTkFrame(
-                    bar_bg,
-                    fg_color=COLORS.get(color_key, "#48BB78"),
-                    height=5, corner_radius=2,
-                ).place(x=0, y=0, relheight=1, relwidth=min(pct, 1.0))
+            # In row — green, shows actual UGX amount
+            in_row = ctk.CTkFrame(col, fg_color="transparent")
+            in_row.pack(fill="x", padx=10, pady=1)
+            ctk.CTkLabel(
+                in_row, text="In",
+                font=FONTS.get("caption", ("Helvetica", 10)),
+                text_color=COLORS.get("text_muted", "#718096"),
+                width=28, anchor="w",
+            ).pack(side="left")
+            ctk.CTkLabel(
+                in_row, text=_ugx(ms.total_in),
+                font=FONTS.get("caption", ("Helvetica", 11, "bold")),
+                text_color=COLORS.get("accent_green", "#276749"),
+                anchor="e",
+            ).pack(side="right")
+
+            # Bar for In
+            bar_bg_in = ctk.CTkFrame(
+                col, fg_color=COLORS.get("border", "#E2E8F0"),
+                height=6, corner_radius=3,
+            )
+            bar_bg_in.pack(fill="x", padx=10, pady=(0, 4))
+            pct_in = max(0.04, ms.total_in / max_val) if max_val > 0 else 0.04
+            ctk.CTkFrame(
+                bar_bg_in,
+                fg_color=COLORS.get("accent_green", "#48BB78"),
+                height=6, corner_radius=3,
+            ).place(x=0, y=0, relheight=1, relwidth=min(pct_in, 1.0))
+
+            # Out row — red, shows actual UGX amount
+            out_row = ctk.CTkFrame(col, fg_color="transparent")
+            out_row.pack(fill="x", padx=10, pady=1)
+            ctk.CTkLabel(
+                out_row, text="Out",
+                font=FONTS.get("caption", ("Helvetica", 10)),
+                text_color=COLORS.get("text_muted", "#718096"),
+                width=28, anchor="w",
+            ).pack(side="left")
+            ctk.CTkLabel(
+                out_row, text=_ugx(ms.total_out),
+                font=FONTS.get("caption", ("Helvetica", 11, "bold")),
+                text_color=COLORS.get("danger", "#E53E3E"),
+                anchor="e",
+            ).pack(side="right")
+
+            # Bar for Out
+            bar_bg_out = ctk.CTkFrame(
+                col, fg_color=COLORS.get("border", "#E2E8F0"),
+                height=6, corner_radius=3,
+            )
+            bar_bg_out.pack(fill="x", padx=10, pady=(0, 6))
+            pct_out = max(0.04, ms.total_out / max_val) if max_val > 0 else 0.04
+            ctk.CTkFrame(
+                bar_bg_out,
+                fg_color=COLORS.get("danger", "#E53E3E"),
+                height=6, corner_radius=3,
+            ).place(x=0, y=0, relheight=1, relwidth=min(pct_out, 1.0))
+
+            # Net — divider + bold net figure
+            ctk.CTkFrame(
+                col, fg_color=COLORS.get("border", "#E2E8F0"), height=1,
+            ).pack(fill="x", padx=10, pady=(2, 4))
 
             net = ms.total_in - ms.total_out
             net_color = (COLORS.get("accent_green", "#276749")
@@ -326,15 +399,22 @@ class StatementResultCard(ctk.CTkFrame):
             sign = "+" if net >= 0 else ""
             ctk.CTkLabel(
                 col,
-                text=f"{sign}{int(net/1000)}k",
-                font=FONTS.get("caption", ("Helvetica", 9)),
+                text=f"Net: {sign}{_ugx(net)}",
+                font=FONTS.get("caption", ("Helvetica", 11, "bold")),
                 text_color=net_color,
                 anchor="center",
-            ).pack(anchor="center", padx=4, pady=(2, 6))
+            ).pack(anchor="center", padx=8, pady=(0, 10))
+
+        # Advance the parent card's row counter by exactly how many rows
+        # the breakdown grid used (wraps at PER_ROW months per row).
+        import math
+        rows_used = max(1, math.ceil(len(r.monthly_summaries) / PER_ROW))
+        self._next_row += rows_used
 
         ctk.CTkFrame(
             self, fg_color=COLORS.get("border", "#E2E8F0"), height=1,
-        ).grid(row=7, column=0, sticky="ew", padx=16, pady=(4, 0))
+        ).grid(row=self._next_row, column=0, sticky="ew", padx=16, pady=(4, 0))
+        self._next_row += 1
 
     # ── Loan scenarios ────────────────────────────────────────────────────────
 
@@ -410,7 +490,8 @@ class StatementResultCard(ctk.CTkFrame):
 
         # ── Layout ────────────────────────────────────────────────────────────
         section = ctk.CTkFrame(self, fg_color="transparent")
-        section.grid(row=8, column=0, sticky="ew", padx=16, pady=10)
+        section.grid(row=self._next_row, column=0, sticky="ew", padx=16, pady=10)
+        self._next_row += 1
         for i in range(len(scenarios)):
             section.columnconfigure(i, weight=1, uniform="scenario")
 
@@ -532,7 +613,8 @@ class StatementResultCard(ctk.CTkFrame):
 
         ctk.CTkFrame(
             self, fg_color=COLORS.get("border", "#E2E8F0"), height=1,
-        ).grid(row=9, column=0, sticky="ew", padx=16, pady=(4, 0))
+        ).grid(row=self._next_row, column=0, sticky="ew", padx=16, pady=(4, 0))
+        self._next_row += 1
 
     # ── Risk note ─────────────────────────────────────────────────────────────
 
@@ -565,7 +647,8 @@ class StatementResultCard(ctk.CTkFrame):
             fg_color=COLORS.get("bg_warning", "#FFFBEB"),
             corner_radius=8,
         )
-        note.grid(row=10, column=0, sticky="ew", padx=16, pady=(8, 14))
+        note.grid(row=self._next_row, column=0, sticky="ew", padx=16, pady=(8, 14))
+        self._next_row += 1
 
         for w in warnings:
             ctk.CTkLabel(
