@@ -270,6 +270,56 @@ class StatementParser:
             stmt_type, StatementParser._extract_identity_generic)
         identity_fn(raw_text, result)
 
+        # ── LLM fallback for any identity fields regex still missed ────────
+        # Only triggers when client_name OR account_number is missing after
+        # the regex extractor ran — these are the two fields most likely to
+        # break on a layout variant we haven't seen. This costs one Groq API
+        # call only on a regex miss; normal statements with working regex
+        # never trigger it. NIN is excluded from the trigger condition since
+        # many institutions legitimately never print it (that's not a
+        # parsing failure, so it shouldn't burn an API call every time).
+        if not result.client_name or not result.account_number:
+            try:
+                from app.core.agents.ai_core import AICore
+                header_chunk = raw_text[:1500]
+                fields = AICore.extract_identity_fields(header_chunk)
+
+                if not result.client_name and fields.get("client_name"):
+                    candidate = fields["client_name"].strip().upper()
+                    if StatementParser._is_valid_name(candidate):
+                        result.client_name    = candidate
+                        result.account_holder = candidate
+
+                if not result.account_number and fields.get("account_number"):
+                    digits = re.sub(r"\D", "", str(fields["account_number"]))
+                    if len(digits) >= 6:
+                        result.account_number = digits
+
+                if not result.nin and fields.get("nin"):
+                    candidate = str(fields["nin"]).strip().upper()
+                    if len(candidate) == 14 and StatementParser._is_valid_nin(candidate):
+                        result.nin = candidate
+
+                if not result.period_from and fields.get("period_from"):
+                    parsed = _parse_date(str(fields["period_from"]))
+                    if parsed:
+                        result.period_from = parsed
+
+                if not result.period_to and fields.get("period_to"):
+                    parsed = _parse_date(str(fields["period_to"]))
+                    if parsed:
+                        result.period_to = parsed
+
+                if result.client_name or result.account_number:
+                    logger.info(
+                        "Identity extraction: LLM fallback recovered "
+                        f"{'name ' if fields.get('client_name') else ''}"
+                        f"{'account_number ' if fields.get('account_number') else ''}"
+                        "after regex extractor found nothing.")
+            except Exception as e:
+                logger.warning(f"LLM identity fallback failed: {e}")
+                # Fail silently — UI will show "Not found in PDF" as before
+
         # ── Route to institution-specific transaction parser ───────────────
         dispatch = {
             "mtn_momo":  StatementParser._parse_mtn_momo,
