@@ -14,6 +14,7 @@ Routing:
   • Credit score       → CreditScorer      (offline)
   • Reminders         → ReminderService   (offline)
   • Natural language   → Groq API          (online, fallback to local)
+  • Statement identity  → Groq API (LAST-RESORT fallback when regex fails)
 
 Add to your .env:
     GROQ_API_KEY=gsk_your_key_here
@@ -329,6 +330,89 @@ You have access to live database data and statement analysis results provided be
             return "offline"
         except Exception:
             return "offline"
+
+    # ── Statement identity extraction (LLM fallback) ─────────────────────────
+    #
+    # Used by StatementParser as a LAST-RESORT fallback when institution-
+    # specific regex extractors fail to find client_name, account_number,
+    # nin, or period from a statement's header text. Regex is preferred
+    # when it works (fast, free, deterministic) — this only runs when
+    # regex comes up empty, so normal MoMo/Equity parsing never triggers
+    # an API call.
+    #
+    # Returns a dict with keys: client_name, account_number, nin,
+    # period_from, period_to — each either a string/None as extracted,
+    # or None if the LLM could not find it either. Never raises; any
+    # failure (no API key, network error, bad JSON) returns an all-None
+    # dict so the caller can safely fall back to "Not found in PDF".
+
+    @staticmethod
+    def extract_identity_fields(header_text: str) -> dict:
+        empty = {
+            "client_name":    None,
+            "account_number": None,
+            "nin":            None,
+            "period_from":    None,
+            "period_to":      None,
+        }
+        try:
+            from groq import Groq
+            from app.config.settings import GROQ_API_KEY
+            import json
+            import re as _re
+
+            if not GROQ_API_KEY or len(GROQ_API_KEY) < 10:
+                return empty
+
+            client = Groq(api_key=GROQ_API_KEY)
+
+            system_prompt = (
+                "You extract structured identity fields from Ugandan bank or "
+                "mobile money statement headers. You will be given raw text "
+                "extracted from the top portion of a statement PDF. "
+                "Find these four fields if present:\n"
+                "  - client_name: the account holder's full name (a person's "
+                "name, NOT a bank name, NOT a label like 'Account Statement')\n"
+                "  - account_number: the bank account or mobile wallet number "
+                "(digits only, no label text)\n"
+                "  - nin: Uganda National ID Number, exactly 14 characters, "
+                "format like CM97027102X4CU or CF85123456ABCD. Most statements "
+                "do NOT include this — if absent, return null.\n"
+                "  - period_from and period_to: the statement period start "
+                "and end dates, formatted as DD/MM/YYYY\n\n"
+                "Respond with ONLY a JSON object with these exact keys: "
+                'client_name, account_number, nin, period_from, period_to. '
+                "Use null for any field you cannot find with confidence. "
+                "Do not include any other text, explanation, or markdown "
+                "formatting — return raw JSON only."
+            )
+
+            response = client.chat.completions.create(
+                model=AICore.GROQ_MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": header_text[:2000]},
+                ],
+                max_tokens=300,
+                temperature=0.0,   # deterministic extraction, no creativity
+            )
+
+            raw = response.choices[0].message.content.strip()
+            # Strip markdown code fences if the model added them anyway
+            raw = _re.sub(r'^```(?:json)?\s*|\s*```$', '', raw.strip())
+
+            data = json.loads(raw)
+            return {
+                "client_name":    data.get("client_name") or None,
+                "account_number": data.get("account_number") or None,
+                "nin":            data.get("nin") or None,
+                "period_from":    data.get("period_from") or None,
+                "period_to":      data.get("period_to") or None,
+            }
+
+        except Exception:
+            # No key, network error, bad JSON, library missing — fail safe
+            return empty
 
     # ── Helpers ────────────────────────────────────────────────────────────────
 
