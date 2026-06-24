@@ -1412,9 +1412,9 @@ def _classify_bank_text_strict(desc: str) -> Optional[str]:
     return None
 
 
-# ══════════════════════════════════════════════════════════════════════════════
+
 # CLI test  —  python statement_parser.py <statement.pdf>
-# ══════════════════════════════════════════════════════════════════════════════
+
 
 if __name__ == "__main__":
     import sys
