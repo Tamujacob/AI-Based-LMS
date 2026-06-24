@@ -736,16 +736,15 @@ class ChatbotScreen(ctk.CTkFrame):
         bubble = ctk.CTkFrame(wrapper, fg_color=bubble_color, corner_radius=10)
         bubble.pack(anchor=align, pady=(2, 0), fill="x")
 
-        # Height: 1 line = ~18px, pad 20px top+bottom, cap at 400px
-        line_count  = text.count("\n") + 1
-        char_lines  = len(text) // 80          # approx wrapped lines
-        total_lines = line_count + char_lines
-        height      = min(400, max(32, total_lines * 18 + 20))
-
+        # Render with a generous starting height, then SHRINK to the actual
+        # content height after layout — this replaces the old approach of
+        # guessing pixel height from character count, which was unreliable
+        # because real wrap width depends on the rendered panel width, font,
+        # and zoom level, none of which character-counting can know.
         txt = ctk.CTkTextbox(
             bubble,
             width=1,
-            height=height,
+            height=32,            # placeholder — corrected below
             fg_color=bubble_color,
             text_color=text_color,
             font=FONTS["body_small"],
@@ -758,7 +757,28 @@ class ChatbotScreen(ctk.CTkFrame):
         txt.insert("0.0", text)
         txt.configure(state="disabled")
 
-        self._scroll_to_bottom()
+        # Force layout, then measure how many wrapped display lines Tk
+        # actually produced for this text at its real rendered width, and
+        # resize the textbox to match exactly — no more guessing, no more
+        # empty space and no more cramped clipping.
+        def _fit_height():
+            try:
+                txt.update_idletasks()
+                # dlineinfo on the last character tells us the y-position
+                # and height of the final wrapped line as Tk actually
+                # rendered it — this reflects the TRUE wrap width.
+                last_index = txt._textbox.index("end-1c")
+                bbox = txt._textbox.dlineinfo(last_index)
+                if bbox:
+                    last_line_bottom = bbox[1] + bbox[3]
+                    content_height = last_line_bottom + 16   # inner padding
+                    new_height = min(400, max(28, content_height))
+                    txt.configure(height=new_height)
+            except Exception:
+                pass   # keep placeholder height if measurement fails
+
+        self.after(10, _fit_height)
+        self.after(10, self._scroll_to_bottom)
 
     def _add_system_note(self, text: str):
         """Grey system note — for parsing progress and summaries."""
