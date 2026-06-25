@@ -5,9 +5,20 @@ Reusable widget for uploading and analysing financial statements.
 
 Embedded inside the new loan form in loans_screen.py.
 
+v2 fix — updated for the rewritten LoanCeilingEngine which now returns
+exactly 3 scenarios keyed by DURATION (1/3/6 months), not by NAME
+(Conservative/Standard/Extended). The old LoanScenario dataclass had
+`.name` and `.affordability_pct` as a plain float; the new one has
+`.duration_months`, `.risk_label`, `.is_viable`, and `.affordability_pct`
+already expressed as a 0-100 number (not 0-1). This widget was crashing
+with "'LoanScenario' object has no attribute 'name'" because it was
+never updated when the engine was rewritten for Bingongold Credit's
+real 1/3/6-month lending rule.
+
 Changes from original:
-  - Added 3-scenario cards (Conservative / Standard / Extended)
-    with individual Accept buttons
+  - Scenario cards now keyed by duration_months (1/3/6), not name
+  - 3-month card highlighted as "typical loan" (Bingongold's most common)
+  - Risk label + viability badge shown per card (Low/Moderate/High/Very High)
   - Added Remove file button
   - Added red flags and warnings display below results
   - Kept stated income fallback field (important for manual entry)
@@ -26,7 +37,7 @@ class StatementAnalysisWidget(ctk.CTkFrame):
     """
     Statement upload and analysis panel.
     Shows upload button, runs analysis, displays results,
-    and provides Accept buttons for three loan scenarios.
+    and provides Accept buttons for the 1/3/6-month loan scenarios.
     """
 
     def __init__(self, master, on_accept=None, current_user=None, **kwargs):
@@ -277,6 +288,9 @@ class StatementAnalysisWidget(ctk.CTkFrame):
             self._ceiling = ceiling
 
             # Build summary text
+            # NOTE: StatementResult's field is `statement_type`, not
+            # `source_type` — using the wrong field name here was a second
+            # latent bug that would have crashed once analysis succeeded.
             lines = []
             if parsed and parsed.statement_type not in ("error", "unknown"):
                 lines.append(parsed.as_text())
@@ -312,7 +326,15 @@ class StatementAnalysisWidget(ctk.CTkFrame):
             w.destroy()
 
     def _show_scenario_cards(self):
-        """Build 3 scenario cards — Conservative, Standard, Extended."""
+        """
+        Build 3 scenario cards keyed by duration: 1-month, 3-month, 6-month.
+
+        FIXED: the old version looked up `scenario.name` (Conservative/
+        Standard/Extended) which no longer exists on LoanScenario — the
+        engine was rewritten for Bingongold Credit's real lending rule
+        (max 6 months, typically 3 months) and now exposes
+        `duration_months`, `risk_label`, and `is_viable` instead.
+        """
         if not self._ceiling or not self._ceiling.scenarios:
             return
 
@@ -326,27 +348,35 @@ class StatementAnalysisWidget(ctk.CTkFrame):
 
         ctk.CTkLabel(
             self.scenarios_frame,
-            text="Choose a Scenario:",
+            text="Choose a Loan Duration:",
             font=FONTS["subheading"],
             text_color=COLORS["accent_green_dark"],
             anchor="w",
         ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 6))
 
-        color_map = {
-            "Conservative": "#2980B9",
-            "Standard":      COLORS["accent_green"],
-            "Extended":      COLORS["warning"],
+        # Risk-based colour, not name-based — risk_label is the new source
+        # of truth (Low / Moderate / High / Very High) from the engine.
+        risk_color_map = {
+            "Low":       COLORS.get("accent_green", "#276749"),
+            "Moderate":  COLORS.get("warning", "#D69E2E"),
+            "High":      COLORS.get("danger", "#E53E3E"),
+            "Very High": "#9B2335",
         }
 
+        # Scenarios always come back sorted by duration: [1, 3, 6]
         for i, scenario in enumerate(self._ceiling.scenarios):
-            sc_color = color_map.get(scenario.name, COLORS["accent_green"])
+            months     = scenario.duration_months
+            risk_label = getattr(scenario, "risk_label", "Moderate")
+            is_viable  = getattr(scenario, "is_viable", True)
+            sc_color   = risk_color_map.get(risk_label, COLORS["accent_green"])
+            is_typical = (months == 3)   # Bingongold's typical loan term
 
             card = ctk.CTkFrame(
                 self.scenarios_frame,
                 fg_color=COLORS["bg_card"],
                 corner_radius=8,
                 border_width=2,
-                border_color=sc_color,
+                border_color=(COLORS["accent_green"] if is_typical else sc_color),
             )
             card.grid(row=1, column=i, padx=4, sticky="nsew")
 
@@ -356,11 +386,18 @@ class StatementAnalysisWidget(ctk.CTkFrame):
                 height=4, corner_radius=0,
             ).pack(fill="x")
 
+            if is_typical:
+                ctk.CTkLabel(
+                    card, text="✦ typical loan",
+                    font=FONTS.get("caption", ("Helvetica", 10)),
+                    text_color=COLORS["accent_green"],
+                ).pack(pady=(6, 0))
+
             ctk.CTkLabel(
-                card, text=scenario.name,
+                card, text=f"{months}-Month Loan",
                 font=FONTS["badge"],
-                text_color=sc_color,
-            ).pack(pady=(8, 2))
+                text_color=COLORS["text_primary"],
+            ).pack(pady=(6 if not is_typical else 2, 2))
 
             ctk.CTkLabel(
                 card,
@@ -371,36 +408,40 @@ class StatementAnalysisWidget(ctk.CTkFrame):
 
             ctk.CTkLabel(
                 card,
-                text=f"{scenario.duration_months} months",
-                font=FONTS["body_small"],
-                text_color=COLORS["text_muted"],
-            ).pack()
-
-            ctk.CTkLabel(
-                card,
                 text=f"UGX {float(scenario.monthly_instalment):,.0f}/mo",
                 font=FONTS["body_small"],
                 text_color=COLORS["text_secondary"],
             ).pack(pady=(2, 4))
 
+            # affordability_pct is already a 0-100 number on the new
+            # LoanScenario, not a 0-1 fraction — display directly.
+            aff_pct = float(getattr(scenario, "affordability_pct", 0))
             ctk.CTkLabel(
                 card,
-                text=f"{scenario.affordability_pct:.0f}% of income",
+                text=f"{aff_pct:.0f}% of income  ·  {risk_label} Risk",
                 font=FONTS["caption"],
                 text_color=sc_color,
-            ).pack(pady=(0, 4))
+            ).pack(pady=(0, 2))
+
+            if not is_viable:
+                ctk.CTkLabel(
+                    card,
+                    text="⚠ High repayment risk",
+                    font=FONTS["caption"],
+                    text_color=COLORS["danger"],
+                ).pack(pady=(0, 4))
 
             ctk.CTkButton(
                 card,
                 text="✔ Accept",
                 height=28,
                 font=FONTS["caption"],
-                fg_color=sc_color,
+                fg_color=(sc_color if is_viable else COLORS["bg_input"]),
                 hover_color=COLORS["accent_green_dark"],
-                text_color="#FFFFFF",
+                text_color=("#FFFFFF" if is_viable else COLORS["text_primary"]),
                 corner_radius=6,
                 command=lambda s=scenario: self._accept_scenario(s),
-            ).pack(fill="x", padx=8, pady=(0, 10))
+            ).pack(fill="x", padx=8, pady=(4, 10))
 
     def _show_flags(self):
         """Show red flags and warnings below scenarios."""
@@ -436,28 +477,35 @@ class StatementAnalysisWidget(ctk.CTkFrame):
     # ── Accept handlers ────────────────────────────────────────────────────────
 
     def _accept_scenario(self, scenario):
-        """Called when staff clicks Accept on a specific scenario card."""
+        """Called when staff clicks Accept on a specific duration card."""
+        months = scenario.duration_months
         if self.on_accept:
             self.on_accept(
                 float(scenario.principal),
-                scenario.duration_months,
+                months,
                 self._ceiling,
             )
         self.accept_btn.configure(
-            text=f"✔  {scenario.name} accepted — "
-                 f"UGX {float(scenario.principal):,.0f} / "
-                 f"{scenario.duration_months} months",
+            text=(f"✔  {months}-month loan accepted — "
+                  f"UGX {float(scenario.principal):,.0f}"),
             state="disabled",
         )
 
     def _accept_standard(self):
-        """Accept the standard (middle) recommendation."""
-        if not self._ceiling:
+        """
+        Accept the typical Bingongold loan — the 3-month scenario.
+        Falls back to the middle scenario by index if duration_months
+        is somehow not present (defensive, shouldn't normally happen).
+        """
+        if not self._ceiling or not self._ceiling.scenarios:
             return
-        # Standard is index 1
         scenarios = self._ceiling.scenarios
-        scenario  = scenarios[1] if len(scenarios) > 1 else scenarios[0]
-        self._accept_scenario(scenario)
+        scenario  = next(
+            (s for s in scenarios if getattr(s, "duration_months", None) == 3),
+            scenarios[len(scenarios) // 2] if scenarios else None,
+        )
+        if scenario:
+            self._accept_scenario(scenario)
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
