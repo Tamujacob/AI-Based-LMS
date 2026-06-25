@@ -11,6 +11,12 @@ app/ui/screens/loans_screen.py
   3. Submit — always triggers auto_score_loan() in background so every
      loan reaches the manager with a risk score attached.
      If statement was not analysed, a reminder banner is shown (not a blocker).
+
+v2 fix: StatementResult's field is `statement_type`, not `source_type` —
+the old code referenced `stmt_result.source_type` which doesn't exist on
+the dataclass and would raise AttributeError the moment a statement was
+successfully analysed and the loan submitted with it attached. Fixed in
+_submit_loan() below.
 """
 
 import customtkinter as ctk
@@ -59,9 +65,9 @@ def _to_int(raw: str) -> int:
     return int(_to_float(raw))
 
 
-# ══════════════════════════════════════════════════════════════════════════════
+# 
 # Client picker dialog (multiple-match fallback)
-# ══════════════════════════════════════════════════════════════════════════════
+# 
 
 class ClientPickerDialog(tk.Toplevel):
     def __init__(self, master, clients: list):
@@ -1507,8 +1513,12 @@ class LoansScreen(ctk.CTkFrame):
                 if hasattr(self, "statement_widget"):
                     stmt_result    = self.statement_widget.get_statement_result()
                     ceiling_result = self.statement_widget.get_ceiling_result()
+                    # FIXED: StatementResult's field is `statement_type`,
+                    # not `source_type` — the old reference would raise
+                    # AttributeError here the moment a statement was
+                    # successfully parsed and the loan was submitted.
                     if (stmt_result
-                            and stmt_result.source_type not in (
+                            and stmt_result.statement_type not in (
                                 "error", "unknown", None)):
                         from app.core.models.statement_analysis import (
                             StatementAnalysis)
@@ -1517,7 +1527,7 @@ class LoansScreen(ctk.CTkFrame):
                                 loan_id             = loan.id,
                                 source_file         = (
                                     self.statement_widget._file_path or ""),
-                                statement_type      = stmt_result.source_type,
+                                statement_type      = stmt_result.statement_type,
                                 months_covered      = stmt_result.months_covered,
                                 avg_monthly_income  = float(
                                     stmt_result.avg_monthly_income),
