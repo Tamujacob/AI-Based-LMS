@@ -62,6 +62,12 @@ RULES:
 4. Only refuse questions completely unrelated to credit, lending, finance,
    or this system (e.g. sports, politics, entertainment).
 5. Be concise and practical — loan officers need quick, clear answers.
+6. If a "CLIENT RECORD" or "DATABASE SEARCH" block appears in your context,
+   this is a real, live result from the database — trust it completely and
+   answer directly from it. Never say a client "isn't in our system" if a
+   CLIENT RECORD block for them is present in your context. Only say a
+   client could not be found if the context explicitly contains a
+   "DATABASE SEARCH: No client found" message for that exact query.
  
 You have access to live database data and statement analysis results provided below."""
 
@@ -497,7 +503,85 @@ You have access to live database data and statement analysis results provided be
                 "Please use the Statement Analysis section in the Loans screen."
             )
 
-        return "\n".join(results) if results else ""
+        # ── Client name / info lookup ───────────────────────────────────────
+        # FIXED: previously there was no handler for "give me information
+        # about X", "tell me about X", "who is X", etc. — these fell through
+        # to Groq with only an aggregate portfolio summary as context, which
+        # never contains individual client records. Groq would then
+        # correctly (but unhelpfully) say "I don't see this client" even
+        # when the client clearly exists in the database. This block
+        # extracts the name from the message and runs a real DB search.
+        client_query_patterns = [
+            r"(?:information|info|details)\s+(?:about|on|for)\s+(.+?)(?:\?|$)",
+            r"(?:tell me about|who is|find|search for|look up)\s+(.+?)(?:\?|$)",
+            r"client\s+(?:named|called)\s+(.+?)(?:\?|$)",
+        ]
+        name_candidate = None
+        for pat in client_query_patterns:
+            m = re.search(pat, message, re.IGNORECASE)
+            if m:
+                candidate = m.group(1).strip().strip(".,!")
+                # Reject obviously non-name matches (too short, all digits,
+                # or generic words that aren't a person's name)
+                if (len(candidate) >= 3
+                        and not candidate.isdigit()
+                        and candidate.lower() not in
+                            ("our", "the", "this", "that", "loans", "clients")):
+                    name_candidate = candidate
+                    break
+
+        if name_candidate:
+            try:
+                from app.core.services.client_service import ClientService
+                from app.core.services.loan_service import LoanService
+                from app.core.services.repayment_service import RepaymentService
+
+                matches = ClientService.get_all_clients(search=name_candidate)
+
+                if not matches:
+                    results.append(
+                        f"DATABASE SEARCH: No client found matching "
+                        f"'{name_candidate}'. Confirm this exact spelling "
+                        f"exists in the system, or it may be filed under a "
+                        f"different name."
+                    )
+                else:
+                    for client in matches[:3]:   # cap at 3 to avoid huge context
+                        lines = [
+                            f"CLIENT RECORD — {client.full_name}",
+                            f"  NIN:          {client.nin or '—'}",
+                            f"  Phone:        {client.phone_number or '—'}",
+                            f"  Occupation:   {client.occupation or '—'}",
+                        ]
+                        if client.monthly_income:
+                            lines.append(
+                                f"  Stated Income: UGX "
+                                f"{float(str(client.monthly_income).replace(',', '')):,.0f}")
+
+                        try:
+                            all_loans = LoanService.get_all_loans()
+                            client_loans = [
+                                l for l in all_loans
+                                if l.client_id == client.id]
+                            if client_loans:
+                                lines.append(f"  Loans ({len(client_loans)}):")
+                                for loan in client_loans[:5]:
+                                    balance = RepaymentService.get_outstanding_balance(loan.id)
+                                    lines.append(
+                                        f"    • {loan.loan_number} | "
+                                        f"{loan.status.value.upper()} | "
+                                        f"Principal: UGX {float(loan.principal_amount or 0):,.0f} | "
+                                        f"Outstanding: UGX {float(balance):,.0f}")
+                            else:
+                                lines.append("  Loans: None on record")
+                        except Exception:
+                            pass
+
+                        results.append("\n".join(lines))
+            except Exception as e:
+                results.append(f"DATABASE SEARCH ERROR: {e}")
+
+        return "\n\n".join(results) if results else ""
 
     @staticmethod
     def _local_portfolio_summary(context: str) -> str:
