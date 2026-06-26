@@ -567,11 +567,62 @@ You have access to live database data and statement analysis results provided be
                                 lines.append(f"  Loans ({len(client_loans)}):")
                                 for loan in client_loans[:5]:
                                     balance = RepaymentService.get_outstanding_balance(loan.id)
+
+                                    # ── Expanded per-loan detail ──────────────
+                                    # Previously only showed status, principal,
+                                    # and outstanding balance. Now includes
+                                    # duration, interest rate, total repayable,
+                                    # monthly instalment, and key dates so the
+                                    # chatbot can answer follow-up questions
+                                    # about a specific loan without another
+                                    # round trip.
                                     lines.append(
-                                        f"    • {loan.loan_number} | "
-                                        f"{loan.status.value.upper()} | "
-                                        f"Principal: UGX {float(loan.principal_amount or 0):,.0f} | "
-                                        f"Outstanding: UGX {float(balance):,.0f}")
+                                        f"    • {loan.loan_number} "
+                                        f"[{loan.status.value.upper()}]")
+                                    lines.append(
+                                        f"        Type: "
+                                        f"{loan.loan_type.value if loan.loan_type else '—'}  |  "
+                                        f"Principal: UGX {float(loan.principal_amount or 0):,.0f}  |  "
+                                        f"Duration: {loan.duration_months} months")
+                                    if loan.total_interest:
+                                        lines.append(
+                                            f"        Interest (10%/mo): "
+                                            f"UGX {float(loan.total_interest):,.0f}  |  "
+                                            f"Total Repayable: "
+                                            f"UGX {float(loan.total_repayable):,.0f}  |  "
+                                            f"Monthly Instalment: "
+                                            f"UGX {float(loan.monthly_installment):,.0f}"
+                                            if loan.monthly_installment else "")
+                                    lines.append(
+                                        f"        Outstanding Balance: "
+                                        f"UGX {float(balance):,.0f}")
+                                    lines.append(
+                                        f"        Application: {loan.application_date or '—'}  |  "
+                                        f"Approved: {loan.approval_date or '—'}  |  "
+                                        f"Due: {loan.due_date or '—'}")
+                                    if loan.purpose:
+                                        lines.append(f"        Purpose: {loan.purpose}")
+                                    if loan.risk_score:
+                                        lines.append(f"        Risk Score: {loan.risk_score}")
+
+                                    # ── Repayment history for this loan ───────
+                                    try:
+                                        repayments = RepaymentService.get_repayments_for_loan(loan.id)
+                                        if repayments:
+                                            lines.append(
+                                                f"        Repayments ({len(repayments)} made):")
+                                            for r in repayments[:10]:
+                                                lines.append(
+                                                    f"          - UGX {float(r.amount):,.0f} "
+                                                    f"on {r.payment_date}"
+                                                    + (f"  (receipt {r.receipt_number})"
+                                                       if getattr(r, "receipt_number", None) else ""))
+                                        else:
+                                            lines.append(
+                                                "        Repayments: none made yet")
+                                    except Exception:
+                                        pass
+
                             else:
                                 lines.append("  Loans: None on record")
                         except Exception:
