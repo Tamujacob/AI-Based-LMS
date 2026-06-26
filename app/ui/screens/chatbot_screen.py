@@ -761,24 +761,54 @@ class ChatbotScreen(ctk.CTkFrame):
         # actually produced for this text at its real rendered width, and
         # resize the textbox to match exactly — no more guessing, no more
         # empty space and no more cramped clipping.
-        def _fit_height():
+        #
+        # FIXED: a single measurement at 10ms was sometimes firing before
+        # the widget's layout had fully settled — especially right after a
+        # large StatementResultCard was inserted above it — causing
+        # dlineinfo() to report only the first rendered line and the
+        # textbox getting locked at a tiny height, visually clipping the
+        # rest of a complete response (the text WAS fully inserted, it was
+        # just not visible). Now retries the measurement across several
+        # delays and always keeps the largest height seen, plus a safety
+        # floor based on actual line count so a bad single measurement
+        # can never under-size the box.
+        def _measure_once():
             try:
                 txt.update_idletasks()
-                # dlineinfo on the last character tells us the y-position
-                # and height of the final wrapped line as Tk actually
-                # rendered it — this reflects the TRUE wrap width.
                 last_index = txt._textbox.index("end-1c")
                 bbox = txt._textbox.dlineinfo(last_index)
                 if bbox:
                     last_line_bottom = bbox[1] + bbox[3]
-                    content_height = last_line_bottom + 16   # inner padding
-                    new_height = min(400, max(28, content_height))
-                    txt.configure(height=new_height)
+                    return last_line_bottom + 16   # inner padding
             except Exception:
-                pass   # keep placeholder height if measurement fails
+                pass
+            return None
+
+        def _fit_height(attempt=0):
+            measured = _measure_once()
+
+            # Safety floor: estimate from raw line count so we never end up
+            # smaller than the text could possibly need, even if dlineinfo
+            # under-reports during an in-progress layout pass.
+            approx_lines = text.count(chr(10)) + 1 + (len(text) // 90)
+            floor_height = approx_lines * 18 + 20
+
+            current = max(measured or 0, floor_height)
+            new_height = min(400, max(28, current))
+
+            # Only grow, never shrink across retries — protects against a
+            # later, more-settled measurement being smaller due to a
+            # transient layout state.
+            prev = getattr(txt, "_measured_height", 0)
+            if new_height > prev:
+                txt.configure(height=new_height)
+                txt._measured_height = new_height
+
+            if attempt < 3:
+                self.after(60, lambda: _fit_height(attempt + 1))
 
         self.after(10, _fit_height)
-        self.after(10, self._scroll_to_bottom)
+        self.after(250, self._scroll_to_bottom)
 
     def _add_system_note(self, text: str):
         """Grey system note — for parsing progress and summaries."""
