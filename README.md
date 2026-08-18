@@ -1,4 +1,4 @@
-# AI-Based Loans Management System
+v# AI-Based Loans Management System
 
 > A production-grade, agentic AI-powered desktop loan management system built with Python.
 > Developed as a Final Year Project at **Bugema University** and deployed at **Bingongold Credit**, Ham Tower, Wandegeya, Kampala, Uganda.
@@ -352,9 +352,7 @@ Monthly Installment = Total Repayable ÷ Duration (months)
 
 ## Author
 
-**Tamukedde Jacob** | 24/BIT/BU/R/0010
-Bachelor of Information Technology — Final Year Project
-Bugema University, Kampala, Uganda
+**Tamukedde Jacob** 
 
 📧 [jacobtamukedde@gmail.com](mailto:jacobtamukedde@gmail.com)
 📞 +256 787 022 284
@@ -362,6 +360,4 @@ Bugema University, Kampala, Uganda
 
 ---
 
-## License
 
-Academic and educational use. Not for commercial redistribution without written permission from the author.
